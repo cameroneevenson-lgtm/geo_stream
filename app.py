@@ -209,13 +209,20 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
 
         if fetch_live and bbox is not None:
             active_roi = st.session_state.get("active_roi")
+            fetch_progress = st.status(
+                "Fetching ECCC coastal-flood data…",
+                expanded=True,
+                state="running",
+            )
             try:
-                with st.spinner("Fetching ECCC coastal-flood data…"):
+                with fetch_progress:
+                    st.write("Contacting the ECCC GeoMet service…")
                     live_response = _cached_fetch(
                         ECCC_API_URL,
                         "en",
                         _rounded_bbox(bbox),
                     )
+                    st.write("Validating and clipping features to the exact region…")
                     clipped = clip_feature_collection(live_response, active_roi)
                 _store_dataset(
                     raw_response=live_response,
@@ -225,14 +232,34 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                     source_mode="live",
                     warnings=clipped.warnings,
                 )
+                fetch_progress.update(
+                    label=(
+                        "ECCC fetch complete — "
+                        f"{st.session_state['raw_feature_count']} returned, "
+                        f"{st.session_state['clipped_feature_count']} intersected "
+                        "the region"
+                    ),
+                    state="complete",
+                    expanded=False,
+                )
             except (ECCCError, GeometryError) as exc:
                 LOGGER.warning("Live fetch failed: %s", exc, exc_info=True)
                 action_error = str(exc)
+                fetch_progress.update(
+                    label="ECCC fetch failed — previous results were kept",
+                    state="error",
+                    expanded=True,
+                )
             except Exception:
                 LOGGER.exception("Unexpected failure while fetching ECCC data")
                 action_error = (
                     "An unexpected error occurred while processing the ECCC "
                     "response. The previous results were kept."
+                )
+                fetch_progress.update(
+                    label="ECCC fetch failed — previous results were kept",
+                    state="error",
+                    expanded=True,
                 )
 
         if generate_synthetic and bbox is not None:
@@ -333,6 +360,15 @@ def _render_source_status(stale: bool) -> None:
         f"Displayed source: **{source_label}**"
         + (f" · Retrieved/generated {timestamp_text}" if timestamp_text else "")
     )
+    if source_mode == "live":
+        raw_count = int(st.session_state.get("raw_feature_count", 0))
+        clipped_count = int(st.session_state.get("clipped_feature_count", 0))
+        st.success(
+            "Last successful ECCC fetch"
+            + (f": {timestamp_text}" if timestamp_text else "")
+            + f" · {raw_count} returned · {clipped_count} intersected "
+            "the exact region"
+        )
     if stale:
         st.warning(
             "The current drawing differs from the ROI used for these results. "

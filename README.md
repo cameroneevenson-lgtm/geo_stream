@@ -12,13 +12,21 @@ alerts and emergency guidance always take precedence.
 
 ## Data source
 
-Live data comes from the experimental ECCC GeoMet OGC API collection:
+The application uses ECCC's official rolling MSC Datamart forecast archive:
 
-<https://api.weather.gc.ca/collections/coastal_flood_risk_index/items>
+<https://dd.weather.gc.ca/YYYYMMDD/WXO-DD/coastal-flooding/risk-index/>
 
-Geo Stream does not enumerate ECCC Datamart directories. The current GeoMet
-collection is a live view and can validly return no features when no active
-coastal-flood products are published.
+ECCC currently retains about 30 days of Datamart files. These are archived
+forecasts, not observed flood events, a 30-day average, inundation maps, or a
+permanent hazard layer. The current GeoMet collection still exists, but its
+current-publication view can be globally empty; Geo Stream therefore asks for
+an explicit recent archive issue date instead.
+
+The [Coastal Flooding Risk Index Datamart
+documentation](https://eccc-msc.github.io/open-data/msc-data/coastal-flooding/readme_coastal-flooding-risk-index-datamart_en/)
+defines the GeoJSON filenames. The [MSC Datamart
+documentation](https://eccc-msc.github.io/open-data/msc-datamart/readme_en/)
+documents the rolling retention window.
 
 ## How it works
 
@@ -27,22 +35,28 @@ coastal-flood products are published.
    click the first point again to finish.
 2. To change a region, choose the pencil or trash button, make the change, and
    choose **Save**.
-3. Press **Fetch ECCC data**.
-4. Geo Stream sends only the ROI bounding box, in CRS84
-   `minLon,minLat,maxLon,maxLat` order, to GeoMet.
-5. All returned pages are combined and every source geometry is intersected
-   locally with the exact drawn ROI.
-6. Sidebar filters update the map, summary, table, and download without another
-   network request.
+3. Choose an **Archived ECCC issue date (UTC)** from the latest 30 days and
+   press **Fetch archived ECCC forecast**.
+4. Geo Stream lists that official Datamart directory, keeps the highest
+   amendment of each product, downloads its static GeoJSON files, and combines
+   their features. Archive files do not support a server-side ROI or bbox.
+5. Every source geometry is intersected locally with the exact drawn ROI.
+6. Sidebar filters update the map, summary, table, and clipped download without
+   another network request.
+7. **Download raw fetched ECCC JSON** supplies the per-file responses before
+   clipping or filtering. When at least two validity times intersect the ROI,
+   the optional timeline animates those forecast frames within the loaded
+   issue; it does not fetch or average all 30 retained days.
 
-Map navigation is constrained to Canada's geographic extent. The basemap does
-not wrap or permit zooming out to a worldwide view.
+Map navigation stays Canada-focused but includes a buffer around the national
+extent so every coast and northern area can be brought fully into view. The
+basemap does not wrap around the world.
 
 The application keeps its network client, geometry processing, property
 normalization, filtering, synthetic generation, and Folium rendering in
 separate modules under `coastal_flood_explorer/`. Streamlit session state holds
-the current drawing and the last successful dataset; public API responses are
-cached for five minutes.
+the current drawing and the last successful dataset; archive results are cached
+for five minutes by official archive root and UTC issue date.
 
 ## Installation
 
@@ -114,16 +128,18 @@ Install and keep `cloudflared` current using
 ## Synthetic development mode
 
 Enable **Use synthetic test data** in the sidebar and choose **Generate
-synthetic test data** to exercise all risk colours when the live collection is
-empty. Synthetic data replaces rather than mixes with live results and is
+synthetic test data** to exercise all risk colours when an archived issue is
+empty. Synthetic data replaces rather than mixes with archived results and is
 labelled on the map, in feature properties, and in the table. It must never be
 interpreted as ECCC data.
 
 ## Empty-data semantics
 
-An empty response means that no active coastal-flooding polygons were returned
-for the selected region at fetch time. It does **not** mean that the region is
-safe, that risk is zero, or that an all-clear has been issued.
+An archive issue can contain valid empty files when ECCC published no
+coastal-flood-risk polygons for those products. A nonempty issue can also have
+no polygons intersecting the exact drawn ROI, and filters can reduce intersected
+features to zero. None of these cases means that the region is safe, that risk
+is zero, or that an all-clear has been issued.
 
 ## Tests
 
@@ -131,7 +147,7 @@ safe, that risk is zero, or that an all-clear has been issued.
 pytest
 ```
 
-Tests mock all HTTP activity and never depend on the live ECCC service.
+Tests mock all HTTP activity and never depend on the ECCC service.
 
 For an additional syntax check:
 
@@ -143,10 +159,12 @@ python -m compileall app.py coastal_flood_explorer watch_and_run.py
 
 - The ECCC collection is experimental and its schema or availability can
   change.
+- The public raw archive is a rolling window of about 30 days. It is not a
+  long-term historical or observed-flood database.
 - Folium drawing state is session-local and is not shared between users.
-- There is no historical database, authentication layer, or persistent
+- There is no long-term database, authentication layer, or persistent
   storage.
-- OpenStreetMap tiles, ECCC GeoMet, and quick tunnels require internet access.
+- OpenStreetMap tiles, ECCC Datamart, and quick tunnels require internet access.
 - A quick tunnel is appropriate only for temporary development and review.
 
 ## Possible future architecture

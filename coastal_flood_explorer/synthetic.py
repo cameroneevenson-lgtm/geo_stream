@@ -101,7 +101,7 @@ def generate_synthetic_data(
 ) -> FeatureCollection:
     """Generate up to four unmistakably synthetic features within an ROI.
 
-    The generated set replaces, rather than augments, a live dataset. Each
+    The generated set replaces, rather than augments, an ECCC dataset. Each
     polygon has a distinct risk value where the ROI shape permits four bands.
     ``clock`` is injectable so tests and screenshots can be deterministic.
     """

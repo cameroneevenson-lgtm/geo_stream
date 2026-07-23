@@ -1,9 +1,10 @@
 # CLAUDE.md — geo_stream
 
 Streamlit app for exploring **ECCC Coastal Flooding Risk Index** polygons inside
-a region the user draws on a map of Canada. Draw an ROI → fetch that ROI's
-*bounding box* from the ECCC GeoMet OGC API → intersect every returned polygon
-against the *exact* drawn shape locally → filter, inspect, download GeoJSON.
+a region the user draws on a map of Canada. Draw an ROI → choose an issue from
+ECCC's rolling 30-day Datamart forecast archive → fetch its static GeoJSON files
+→ intersect every returned polygon against the *exact* drawn shape locally →
+filter, inspect, animate, and download clipped GeoJSON or the raw JSON bundle.
 
 Exploratory visualization only. It is not a warning service, and every
 user-facing string in the app is written to keep that unambiguous — especially
@@ -18,7 +19,7 @@ gitignored.
 Uses the shared `C:\Tools\.venv`, not a project-local venv. From the repo root:
 
 ```
-C:\Tools\.venv\Scripts\python.exe -m pytest -q          # 174 tests, ~3s, all offline
+C:\Tools\.venv\Scripts\python.exe -m pytest -q          # all tests are offline
 C:\Tools\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
@@ -44,13 +45,16 @@ and is importable without Streamlit.
 
 | File | Role |
 | --- | --- |
-| `api.py` | `ECCCClient` — the only outbound network code. Bounded pagination, retries, strict response validation. |
+| `api.py` | Hardened client for the current GeoMet view; retained and tested although the main UI now uses the archive. |
+| `archive.py` | Hardened Datamart directory/product client, amendment selection, merged collection, and raw bundle. |
+| `archive_dates.py` | Pure UTC 30-day issue-date window helper. |
+| `animation.py` | Pure Folium timeline preparation and rendering for fetched forecast validity times. |
 | `geometry.py` | Shapely: ROI parsing/repair, bbox extraction, per-feature clipping. All GEOS contact is here. |
 | `properties.py` | Reading ECCC's dotted property paths, normalizing risk/contributors/datetimes, the DataFrame, the GeoJSON export. |
 | `filtering.py` | Pure `FilterCriteria` matching + `summarize_features`. No I/O, no Streamlit. |
 | `map_view.py` | Folium map, `Draw` toolbar, drawing rehydration, result layer, escaped popups/tooltips, legend, synthetic banner. |
 | `state.py` | `reconcile_drawings` — validates the raw `all_drawings` payload from streamlit-folium into a `DrawingState`. |
-| `synthetic.py` | Locally generated, loudly labelled fake features for UI work when the live collection is empty. |
+| `synthetic.py` | Locally generated, loudly labelled fake features for UI work when an archive issue is empty. |
 | `watch_and_run.py` | Dev supervisor. Not imported by the app. |
 
 ## Invariants — load-bearing, don't "simplify" them
@@ -58,7 +62,7 @@ and is importable without Streamlit.
 - **`MAP_RETURNED_OBJECTS = ("all_drawings",)`.** Adding `bounds`, `zoom`, or
   `center` makes every pan trigger a Streamlit rerun, and the rerun recenters
   the map — a visible feedback loop. The viewport stays client-side.
-- **`MAP_COMPONENT_KEY` is version-suffixed (`"coastal-flood-map-v3"`).** Bump
+- **`MAP_COMPONENT_KEY` is version-suffixed (`"coastal-flood-map-v4"`).** Bump
   the suffix whenever the map's structure changes; otherwise Streamlit reuses
   the stale mounted component and the change appears not to take.
 - **Drawings survive reruns via `_DrawingHydrator`, not via Folium.** Re-rendered
@@ -67,19 +71,18 @@ and is importable without Streamlit.
   SHA-256 fingerprint of the serialized drawings so a rerun with unchanged
   drawings doesn't wipe an in-progress edit. Deleting either half loses the
   user's ROI on the next rerun.
-- **Only the bbox goes over the wire; the exact ROI is applied locally.** GeoMet
-  takes a rectangle, so the drawn polygon is honoured by
-  `clip_feature_collection` after the fetch. `raw_feature_count` vs
-  `clipped_feature_count` exists to make that two-step visible to the user.
-- **`_cached_fetch` takes `(api_url, language, rounded_bbox)`, never a client
-  object.** `st.cache_data` hashes its arguments; a `requests.Session` or a
-  Shapely geometry poisons the cache. The bbox is rounded to 6dp so pixel-level
-  jitter in a redrawn ROI still hits the 5-minute cache.
-- **`api.py`'s hardening is deliberate**: HTTPS-only URL with no credentials,
-  `allow_redirects=False`, pagination links pinned to the *same origin*,
-  canonical-URL cycle detection, 100-page / 50k-feature ceilings, GET-only
-  retries, and a content-type check before `.json()`. This talks to a live
-  public service over an experimental collection — don't loosen any of it.
+- **Archive files do not accept a bbox; the exact ROI is applied locally.**
+  `_cached_archive_fetch` downloads the selected date's static official files,
+  then `clip_feature_collection` honours the drawn polygon.
+  `raw_feature_count` versus `clipped_feature_count` makes that visible.
+- **`_cached_archive_fetch` takes `(archive_root, YYYYMMDD)`, never a client
+  object, requests session, Shapely geometry, or ROI.** The exact ROI stays
+  outside the cache and remains authoritative for clipping.
+- **`archive.py`'s hardening is deliberate**: HTTPS-only root, no redirects,
+  strict same-directory filename allowlist, highest-amendment selection,
+  response media/type checks, file and feature ceilings, GET-only retries, and
+  transactional failure. Do not loosen it. `api.py` remains similarly hardened
+  for the current GeoMet view.
 - **One malformed feature must never fail the whole response.**
   `clip_feature_collection` skips bad features individually, counts them, and
   returns warnings that the UI surfaces in an expander.
@@ -87,7 +90,7 @@ and is importable without Streamlit.
   subclass and is written to be shown verbatim.** Unexpected exceptions get a
   generic message and a `LOGGER.exception`; raw exception text never reaches
   the UI. Failed fetches keep the previous results rather than blanking them.
-- **Synthetic data replaces live data, never mixes with it.** It is labelled in
+- **Synthetic data replaces archive data, never mixes with it.** It is labelled in
   `source_mode`, the feature properties, the map layer name, a fixed banner, the
   tooltip, the popup, the table's `source` column, and the download filename.
   Keep all of them.
@@ -122,10 +125,10 @@ and is importable without Streamlit.
   streamlit-folium 0.27.x; `folium.template.Template` and the `Draw(feature_group=…)`
   argument need folium 0.20.x; `width="stretch"` on buttons and dataframes needs
   Streamlit ≥1.60. Bumping any of the three needs the map exercised by hand.
-- **An empty result is normal.** The GeoMet collection is a live view of *active*
-  products and legitimately returns zero features. That is not a bug and not an
-  all-clear — `_render_results` distinguishes "nothing returned", "returned but
-  nothing intersected", and "nothing matches the filters".
+- **An empty result is normal.** Official archive files may contain zero
+  features. That is not a bug and not an all-clear — `_render_results`
+  distinguishes an empty issue, polygons that do not intersect the ROI, and
+  features removed by filters.
 
 ## Conventions
 
@@ -137,7 +140,7 @@ a `Z` suffix. Note the spelling split: identifiers use `colour` in `map_view.py`
 and `properties.py` (`RISK_COLOURS`, `risk_colour`) — match the file you're in.
 
 Tests mirror the modules one-to-one and **mock all HTTP** — nothing may reach the
-live ECCC service. `synthetic.generate_synthetic_data` takes an injectable
+ECCC service. `synthetic.generate_synthetic_data` takes an injectable
 `clock` so generated timestamps are deterministic. UI behaviour is tested through
 `streamlit.testing.v1.AppTest` by seeding `session_state` directly.
 

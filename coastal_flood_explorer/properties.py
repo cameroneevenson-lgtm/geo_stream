@@ -312,7 +312,7 @@ def feature_source(feature: Mapping[str, Any]) -> str:
     synthetic = get_property(props, "synthetic", False)
     if synthetic is True or str(synthetic).strip().casefold() in _YES_STRINGS:
         return "Synthetic test data"
-    return "ECCC GeoMet"
+    return "ECCC coastal flooding forecast"
 
 
 def _datetime_table_value(value: Any) -> str:

@@ -26,9 +26,10 @@ from coastal_flood_explorer.properties import (
 
 
 CANADA_BOUNDS = ((41.5, -141.0), (83.2, -52.0))
+CANADA_NAVIGATION_BOUNDS = ((35.0, -150.0), (85.0, -45.0))
 DEFAULT_CENTER = (58.0, -96.0)
 DEFAULT_ZOOM = 4
-MIN_ZOOM = 4
+MIN_ZOOM = 3
 ROI_COLOUR = "#2563eb"
 UNKNOWN_COLOUR = "#64748b"
 
@@ -49,32 +50,33 @@ POPUP_FIELDS: tuple[tuple[str, str], ...] = (
 )
 
 
-class RiskLegend(MacroElement):
-    """Fixed map legend for normalized risk colours."""
+def risk_legend_html() -> str:
+    """Return an accessible horizontal legend for normal page flow."""
 
-    _template = Template(
-        """
-        {% macro html(this, kwargs) %}
-        <div style="
-          position: fixed; bottom: 28px; right: 12px; z-index: 9999;
-          background: rgba(255,255,255,0.96); border: 1px solid #94a3b8;
-          border-radius: 6px; padding: 9px 11px; color: #0f172a;
-          font: 12px/1.35 Arial, sans-serif; box-shadow: 0 1px 5px #64748b;">
-          <div style="font-weight:700;margin-bottom:5px;">Coastal flood risk</div>
-          {% for label, colour in this.items %}
-          <div><span style="display:inline-block;width:11px;height:11px;
-            margin-right:6px;background:{{ colour }};border:1px solid #475569;">
-            </span>{{ label }}</div>
-          {% endfor %}
-        </div>
-        {% endmacro %}
-        """
+    items = "".join(
+        (
+            '<span role="listitem" style="display:inline-flex;align-items:center;'
+            'gap:0.35rem;white-space:nowrap">'
+            '<span aria-hidden="true" style="display:inline-block;width:0.8rem;'
+            f'height:0.8rem;border:1px solid #475569;background:{html.escape(colour)}'
+            '"></span>'
+            f"{html.escape(label)}</span>"
+        )
+        for label, colour in RISK_COLOURS.items()
+    )
+    return (
+        '<div role="list" aria-label="Coastal flood risk legend" '
+        'style="display:flex;flex-wrap:wrap;align-items:center;gap:0.6rem 1rem;'
+        'margin:0.1rem 0 0.65rem">'
+        "<strong>Coastal flood risk:</strong>"
+        f"{items}</div>"
     )
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._name = "RiskLegend"
-        self.items = list(RISK_COLOURS.items())
+
+def build_layer_control() -> folium.LayerControl:
+    """Build a collapsed layer selector that does not cover the map."""
+
+    return folium.LayerControl(collapsed=True, position="topright")
 
 
 class SyntheticBanner(MacroElement):
@@ -229,10 +231,10 @@ def build_base_map() -> folium.Map:
         tiles=None,
         min_zoom=MIN_ZOOM,
         minZoom=MIN_ZOOM,
-        min_lat=CANADA_BOUNDS[0][0],
-        max_lat=CANADA_BOUNDS[1][0],
-        min_lon=CANADA_BOUNDS[0][1],
-        max_lon=CANADA_BOUNDS[1][1],
+        min_lat=CANADA_NAVIGATION_BOUNDS[0][0],
+        max_lat=CANADA_NAVIGATION_BOUNDS[1][0],
+        min_lon=CANADA_NAVIGATION_BOUNDS[0][1],
+        max_lon=CANADA_NAVIGATION_BOUNDS[1][1],
         max_bounds=True,
         max_bounds_viscosity=1.0,
         world_copy_jump=False,
@@ -245,7 +247,13 @@ def build_base_map() -> folium.Map:
         name="OpenStreetMap",
         min_zoom=MIN_ZOOM,
         no_wrap=True,
+        bounds=CANADA_NAVIGATION_BOUNDS,
     ).add_to(map_object)
+    map_object.fit_bounds(
+        CANADA_BOUNDS,
+        padding=(32, 32),
+        max_zoom=DEFAULT_ZOOM,
+    )
     roi_group = folium.FeatureGroup(
         name="Region of interest",
         control=True,
@@ -280,7 +288,6 @@ def build_base_map() -> folium.Map:
         title="Enter fullscreen",
         title_cancel="Exit fullscreen",
     ).add_to(map_object)
-    RiskLegend().add_to(map_object)
     return map_object
 
 

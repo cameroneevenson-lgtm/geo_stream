@@ -207,9 +207,12 @@ def test_feature_record_normalizes_fields_without_mutating_properties() -> None:
     assert feature["properties"] == properties
 
 
-def test_feature_record_derives_explicit_synthetic_and_live_source_labels() -> None:
+def test_feature_record_derives_explicit_synthetic_and_eccc_source_labels() -> None:
     assert feature_record(_feature(synthetic=True))["source"] == "Synthetic test data"
-    assert feature_record(_feature())["source"] == "ECCC GeoMet"
+    assert (
+        feature_record(_feature())["source"]
+        == "ECCC coastal flooding forecast"
+    )
 
 
 def test_feature_record_falls_back_to_property_id() -> None:

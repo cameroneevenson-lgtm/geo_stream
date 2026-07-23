@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +11,9 @@ from coastal_flood_explorer.geometry import GeometryError, parse_roi
 
 
 GeoJSONFeature = dict[str, Any]
+# Viewport values must stay client-side. Returning bounds/zoom makes every pan
+# rerun Streamlit and can create a recentering feedback loop.
+MAP_RETURNED_OBJECTS: tuple[str, ...] = ("all_drawings",)
 
 
 @dataclass(frozen=True)
@@ -77,38 +79,3 @@ def roi_matches(left: object, right: object) -> bool:
         return bool(parse_roi(left).equals(parse_roi(right)))
     except GeometryError:
         return False
-
-
-def viewport_from_map_payload(
-    payload: Mapping[str, Any],
-) -> tuple[tuple[float, float] | None, int | None]:
-    """Extract a safe center and zoom from a streamlit-folium payload."""
-
-    center: tuple[float, float] | None = None
-    bounds = payload.get("bounds")
-    if isinstance(bounds, Mapping):
-        southwest = bounds.get("_southWest")
-        northeast = bounds.get("_northEast")
-        if isinstance(southwest, Mapping) and isinstance(northeast, Mapping):
-            try:
-                south = float(southwest["lat"])
-                west = float(southwest["lng"])
-                north = float(northeast["lat"])
-                east = float(northeast["lng"])
-            except (KeyError, TypeError, ValueError):
-                pass
-            else:
-                if (
-                    all(math.isfinite(value) for value in (south, west, north, east))
-                    and -90 <= south <= north <= 90
-                    and -180 <= west <= 180
-                    and -180 <= east <= 180
-                ):
-                    center = ((south + north) / 2, (west + east) / 2)
-
-    zoom: int | None = None
-    raw_zoom = payload.get("zoom")
-    if isinstance(raw_zoom, (int, float)) and not isinstance(raw_zoom, bool):
-        if math.isfinite(float(raw_zoom)) and 0 <= float(raw_zoom) <= 24:
-            zoom = int(round(float(raw_zoom)))
-    return center, zoom

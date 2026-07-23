@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -78,21 +80,88 @@ class SyntheticBanner(MacroElement):
 
     _template = Template(
         """
-        {% macro html(this, kwargs) %}
-        <div style="
-          position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
-          z-index: 9999; background: #7c2d12; color: white; border-radius: 6px;
-          padding: 7px 12px; font: 700 12px Arial, sans-serif;
-          box-shadow: 0 1px 5px #431407; pointer-events:none;">
-          SYNTHETIC TEST DATA — NOT ECCC DATA
-        </div>
+        {% macro script(this, kwargs) %}
+        var syntheticBanner = document.getElementById(
+          "geo-stream-synthetic-banner"
+        );
+        if ({{ this.visible|tojson }} && !syntheticBanner) {
+          syntheticBanner = document.createElement("div");
+          syntheticBanner.id = "geo-stream-synthetic-banner";
+          syntheticBanner.textContent = "SYNTHETIC TEST DATA — NOT ECCC DATA";
+          syntheticBanner.style.cssText = [
+            "position:fixed",
+            "top:10px",
+            "left:50%",
+            "transform:translateX(-50%)",
+            "z-index:9999",
+            "background:#7c2d12",
+            "color:white",
+            "border-radius:6px",
+            "padding:7px 12px",
+            "font:700 12px Arial,sans-serif",
+            "box-shadow:0 1px 5px #431407",
+            "pointer-events:none"
+          ].join(";");
+          document.body.appendChild(syntheticBanner);
+        } else if (!{{ this.visible|tojson }} && syntheticBanner) {
+          syntheticBanner.remove();
+        }
         {% endmacro %}
         """
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, visible: bool) -> None:
         super().__init__()
         self._name = "SyntheticBanner"
+        self.visible = visible
+
+
+class _DrawingFeatureMetadata(MacroElement):
+    """Restore GeoJSON feature metadata on a rehydrated Leaflet polygon."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        {{ this._parent.get_name() }}.feature = {{ this.feature|tojson }};
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, feature: Mapping[str, Any]) -> None:
+        super().__init__()
+        self._name = "DrawingFeatureMetadata"
+        self.feature = dict(feature)
+
+
+class _DrawingHydrator(MacroElement):
+    """Move dynamic polygons into Folium Draw's stable editable group."""
+
+    _template = Template(
+        """
+        {% macro script(this, kwargs) %}
+        var incomingDrawings = {{ this._parent.get_name() }};
+        var incomingDrawingLayers = incomingDrawings.getLayers().slice();
+        if (
+          window.drawnItems &&
+          window.__geoStreamDrawingFingerprint !== {{ this.fingerprint|tojson }}
+        ) {
+          window.drawnItems.clearLayers();
+          incomingDrawingLayers.forEach(function(layer) {
+            incomingDrawings.removeLayer(layer);
+            window.drawnItems.addLayer(layer);
+          });
+          window.__geoStreamDrawingFingerprint = {{ this.fingerprint|tojson }};
+        } else {
+          incomingDrawings.clearLayers();
+        }
+        {% endmacro %}
+        """
+    )
+
+    def __init__(self, fingerprint: str) -> None:
+        super().__init__()
+        self._name = "DrawingHydrator"
+        self.fingerprint = fingerprint
 
 
 def _rings_to_locations(coordinates: object) -> list[list[tuple[float, float]]]:
@@ -119,6 +188,8 @@ def _rings_to_locations(coordinates: object) -> list[list[tuple[float, float]]]:
 def _add_editable_geometry(
     feature_group: folium.FeatureGroup,
     geometry: Mapping[str, Any],
+    *,
+    feature: Mapping[str, Any] | None = None,
 ) -> None:
     geometry_type = geometry.get("type")
     coordinates = geometry.get("coordinates")
@@ -134,21 +205,20 @@ def _add_editable_geometry(
         locations = _rings_to_locations(polygon)
         if not locations:
             continue
-        folium.Polygon(
+        layer = folium.Polygon(
             locations=locations,
             color=ROI_COLOUR,
             weight=3,
             fill=True,
             fill_color=ROI_COLOUR,
             fill_opacity=0.08,
-        ).add_to(feature_group)
+        )
+        if feature is not None:
+            _DrawingFeatureMetadata(feature).add_to(layer)
+        layer.add_to(feature_group)
 
 
-def build_base_map(
-    drawings: Iterable[Mapping[str, Any]],
-    *,
-    synthetic: bool = False,
-) -> folium.Map:
+def build_base_map() -> folium.Map:
     """Build the stable base map and editable ROI feature group."""
 
     map_object = folium.Map(
@@ -164,10 +234,6 @@ def build_base_map(
         control=True,
         show=True,
     )
-    for feature in drawings:
-        geometry = feature.get("geometry")
-        if isinstance(geometry, Mapping):
-            _add_editable_geometry(roi_group, geometry)
     roi_group.add_to(map_object)
 
     Draw(
@@ -198,9 +264,39 @@ def build_base_map(
         title_cancel="Exit fullscreen",
     ).add_to(map_object)
     RiskLegend().add_to(map_object)
-    if synthetic:
-        SyntheticBanner().add_to(map_object)
     return map_object
+
+
+def build_drawing_hydration_layer(
+    drawings: Iterable[Mapping[str, Any]],
+) -> folium.FeatureGroup:
+    """Build dynamic polygons that are moved into the stable Draw edit group."""
+
+    stored_drawings = [dict(feature) for feature in drawings]
+    serialized = json.dumps(
+        stored_drawings,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    fingerprint = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    group = folium.FeatureGroup(
+        name="Drawing hydration",
+        control=False,
+        show=True,
+    )
+    for feature in stored_drawings:
+        geometry = feature.get("geometry")
+        if isinstance(geometry, Mapping):
+            _add_editable_geometry(
+                group,
+                geometry,
+                feature=feature,
+            )
+    _DrawingHydrator(fingerprint).add_to(group)
+    return group
 
 
 def _escaped(value: object) -> str:
@@ -291,6 +387,7 @@ def build_result_layer(
         else "ECCC coastal flood risk"
     )
     group = folium.FeatureGroup(name=name, control=True, show=True)
+    SyntheticBanner(visible=synthetic).add_to(group)
     if not isinstance(feature_collection, Mapping):
         return group
     features = feature_collection.get("features")

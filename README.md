@@ -22,13 +22,17 @@ coastal-flood products are published.
 
 ## How it works
 
-1. Draw or edit a polygon or rectangle on the map.
-2. Press **Fetch ECCC data**.
-3. Geo Stream sends only the ROI bounding box, in CRS84
+1. In the map's upper-left toolbar, choose the rectangle button and
+   click-drag-release, or choose the polygon button, click each corner, and
+   click the first point again to finish.
+2. To change a region, choose the pencil or trash button, make the change, and
+   choose **Save**.
+3. Press **Fetch ECCC data**.
+4. Geo Stream sends only the ROI bounding box, in CRS84
    `minLon,minLat,maxLon,maxLat` order, to GeoMet.
-4. All returned pages are combined and every source geometry is intersected
+5. All returned pages are combined and every source geometry is intersected
    locally with the exact drawn ROI.
-5. Sidebar filters update the map, summary, table, and download without another
+6. Sidebar filters update the map, summary, table, and download without another
    network request.
 
 The application keeps its network client, geometry processing, property

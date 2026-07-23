@@ -26,9 +26,8 @@ from coastal_flood_explorer.geometry import (
     roi_bbox,
 )
 from coastal_flood_explorer.map_view import (
-    DEFAULT_CENTER,
-    DEFAULT_ZOOM,
     build_base_map,
+    build_drawing_hydration_layer,
     build_result_layer,
 )
 from coastal_flood_explorer.properties import (
@@ -40,15 +39,15 @@ from coastal_flood_explorer.properties import (
     format_utc_datetime,
 )
 from coastal_flood_explorer.state import (
+    MAP_RETURNED_OBJECTS,
     reconcile_drawings,
     roi_matches,
-    viewport_from_map_payload,
 )
 from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 
 LOGGER = logging.getLogger("geo_stream.app")
-MAP_COMPONENT_KEY = "coastal-flood-map"
+MAP_COMPONENT_KEY = "coastal-flood-map-v2"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -63,8 +62,6 @@ STATE_DEFAULTS: dict[str, Any] = {
     "clip_warnings": [],
     "raw_feature_count": 0,
     "clipped_feature_count": 0,
-    "map_center": DEFAULT_CENTER,
-    "map_zoom": DEFAULT_ZOOM,
 }
 
 
@@ -91,12 +88,6 @@ def _sync_map_drawings() -> None:
     payload = st.session_state.get(MAP_COMPONENT_KEY)
     if not isinstance(payload, Mapping):
         return
-    center, zoom = viewport_from_map_payload(payload)
-    if center is not None:
-        st.session_state["map_center"] = center
-    if zoom is not None:
-        st.session_state["map_zoom"] = zoom
-
     drawings_value = payload.get("all_drawings")
     if drawings_value is None:
         return
@@ -173,8 +164,12 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
     with st.sidebar:
         st.header("Region and data")
         if bbox is None:
-            st.info("Draw a polygon or rectangle to select a region.")
+            st.info(
+                "No region selected yet. Use the polygon or rectangle button "
+                "in the map's upper-left drawing toolbar."
+            )
         else:
+            st.success("Region selected — the data actions are ready.")
             st.caption("Active ROI bounds (CRS84: lon, lat)")
             st.code(
                 "\n".join(
@@ -463,9 +458,18 @@ def main() -> None:
     _render_source_status(stale)
 
     synthetic = st.session_state.get("current_source_mode") == "synthetic"
-    base_map = build_base_map(
-        st.session_state.get("drawings", []),
-        synthetic=synthetic,
+    st.subheader("Draw your region")
+    st.info(
+        "**Rectangle:** choose the square button in the map's upper-left "
+        "toolbar, then click, drag, and release.  \n"
+        "**Polygon:** choose the polygon button, click each corner, then click "
+        "the first point again to finish.  \n"
+        "To change a region, choose the pencil or trash button, make the edit, "
+        "then choose **Save**."
+    )
+    base_map = build_base_map()
+    drawing_layer = build_drawing_hydration_layer(
+        st.session_state.get("drawings", [])
     )
     result_layer = build_result_layer(filtered, synthetic=synthetic)
     st_folium(
@@ -473,10 +477,8 @@ def main() -> None:
         key=MAP_COMPONENT_KEY,
         height=650,
         use_container_width=True,
-        returned_objects=["all_drawings", "bounds", "zoom"],
-        center=tuple(st.session_state.get("map_center", DEFAULT_CENTER)),
-        zoom=int(st.session_state.get("map_zoom", DEFAULT_ZOOM)),
-        feature_group_to_add=result_layer,
+        returned_objects=MAP_RETURNED_OBJECTS,
+        feature_group_to_add=[drawing_layer, result_layer],
         layer_control=folium.LayerControl(collapsed=False),
         on_change=_sync_map_drawings,
     )

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from coastal_flood_explorer.state import (
+    MAP_RETURNED_OBJECTS,
     reconcile_drawings,
     roi_matches,
-    viewport_from_map_payload,
 )
 
 
@@ -81,30 +81,5 @@ def test_changed_roi_does_not_match_previous_results() -> None:
     assert not roi_matches(_feature(-65.0), _feature(-64.5))
 
 
-def test_viewport_is_restored_from_map_bounds_and_zoom() -> None:
-    center, zoom = viewport_from_map_payload(
-        {
-            "bounds": {
-                "_southWest": {"lat": 44.0, "lng": -66.0},
-                "_northEast": {"lat": 48.0, "lng": -60.0},
-            },
-            "zoom": 7,
-        }
-    )
-
-    assert center == (46.0, -63.0)
-    assert zoom == 7
-
-
-def test_invalid_viewport_values_are_ignored() -> None:
-    center, zoom = viewport_from_map_payload(
-        {
-            "bounds": {
-                "_southWest": {"lat": "bad", "lng": -66.0},
-                "_northEast": {"lat": 48.0, "lng": -60.0},
-            },
-            "zoom": 999,
-        }
-    )
-    assert center is None
-    assert zoom is None
+def test_only_drawing_changes_trigger_map_reruns() -> None:
+    assert MAP_RETURNED_OBJECTS == ("all_drawings",)

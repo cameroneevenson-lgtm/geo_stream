@@ -49,7 +49,9 @@ ECCC currently retains about 30 days of Datamart files. These are archived
 forecasts, not observed flood events, a 30-day average, inundation maps, or a
 permanent hazard layer. The current GeoMet collection still exists, but its
 current-publication view can be globally empty; Geo Stream therefore asks for
-an explicit recent archive issue date instead.
+an explicit recent archive issue-date range instead. The default range covers
+all 30 retained daily partitions and preserves each forecast snapshot
+independently rather than averaging them.
 
 The [Coastal Flooding Risk Index Datamart
 documentation](https://eccc-msc.github.io/open-data/msc-data/coastal-flooding/readme_coastal-flooding-risk-index-datamart_en/)
@@ -69,30 +71,40 @@ documents the rolling retention window.
    available for a deliberate override.
 4. To change a region, choose the pencil or trash button, make the change, and
    choose **Save**.
-5. Optionally choose an **Archived ECCC issue date (UTC)** from the latest 30
-   days and press **Fetch archived ECCC forecast**.
-6. Geo Stream lists that official Datamart directory, keeps the highest
-   amendment of each product, downloads its static GeoJSON files, and combines
-   their features. Archive files do not support a server-side ROI or bbox.
+5. Optionally choose an **Archived ECCC issue-date range (UTC)** within the
+   latest 30 days and press **Fetch ECCC archive range**. The default includes
+   the full rolling window.
+6. Geo Stream checks every inclusive daily Datamart directory with visible
+   progress, keeps the highest amendment of each product, downloads its static
+   GeoJSON files, and combines their features. A date-specific absence is
+   reported without discarding other successful dates. A systemic connection,
+   rate-limit, or service failure stops the remaining requests instead of
+   repeating the same outage across the range. Archive files do not support a
+   server-side ROI or bbox.
 7. Every source geometry is intersected locally with the exact drawn ROI.
 8. Sidebar filters update the map, summary, table, and clipped download without
    another network request.
 9. Raw-download actions preserve the decoded CHS time-series documents and the
-   per-file ECCC responses before local display processing. When at least two
-   ECCC validity times intersect the ROI, the optional timeline animates those
-   forecast frames within the loaded issue; it does not fetch or average all
-   30 retained days.
+   per-file ECCC responses and not-loaded date diagnostics before local
+   display processing. A partial clipped export says so in its filename and
+   includes its loaded-versus-requested date count. The optional forecast
+   animation presents one issuance at a time, so forecasts from separate issue
+   dates are never combined into one validity frame.
 
 Map navigation stays Canada-focused but includes a buffer around the national
 extent so every coast and northern area can be brought fully into view. The
-basemap does not wrap around the world.
+basemap does not wrap around the world. Intentional space below the map lets
+the page scroll far enough to centre the map vertically in the browser.
 
 The application keeps its network client, geometry processing, property
 normalization, filtering, synthetic generation, and Folium rendering in
 separate modules under `coastal_flood_explorer/`. Streamlit session state holds
 the current drawing, recent CHS bundles, and the last successful ECCC dataset.
-CHS catalogue/time-series results and ECCC archive results use bounded caches
-so drawing and filter reruns do not repeat network requests.
+CHS catalogue/time-series results and individual ECCC archive-date outcomes use
+bounded caches, including safe failures, so drawing, filtering, overlapping
+range requests, and repeated temporary failures do not repeat network requests.
+Range-wide cumulative product and feature ceilings stop aggregation before its
+in-memory result can grow without bound.
 
 ## Installation
 
@@ -164,18 +176,20 @@ Install and keep `cloudflared` current using
 ## Synthetic development mode
 
 Enable **Use synthetic test data** in the sidebar and choose **Generate
-synthetic test data** to exercise all risk colours when an archived issue is
+synthetic test data** to exercise all risk colours when an archived range is
 empty. Synthetic data replaces rather than mixes with archived results and is
 labelled on the map, in feature properties, and in the table. It must never be
 interpreted as ECCC data.
 
 ## Empty-data semantics
 
-An archive issue can contain valid empty files when ECCC published no
-coastal-flood-risk polygons for those products. A nonempty issue can also have
-no polygons intersecting the exact drawn ROI, and filters can reduce intersected
-features to zero. None of these cases means that the region is safe, that risk
-is zero, or that an all-clear has been issued.
+Archive dates can contain valid empty files when ECCC published no
+coastal-flood-risk polygons for those products. A nonempty range can also have
+no polygons intersecting the exact drawn ROI, and filters can reduce
+intersected features to zero. A date that failed or was not attempted is
+reported as **not loaded**; that is different from a successfully loaded empty
+date. None of these cases means that the region is safe, that risk is zero, or
+that an all-clear has been issued.
 
 ## Tests
 

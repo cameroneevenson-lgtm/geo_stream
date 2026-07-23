@@ -5,7 +5,8 @@ Streamlit app with an always-visible **CHS water-level** view and optional
 selects an operating CHS observation station inside the exact shape, or the
 nearest station with an explicit outside-distance label. The same ROI can then
 be used to fetch ECCC's rolling 30-day Datamart forecast archive, intersect its
-polygons locally, filter, inspect, animate, and download processed or raw data.
+daily snapshots as an inclusive range, intersect their polygons locally,
+filter, inspect, animate, and download processed or raw data.
 
 Exploratory visualization only. It is not a warning service, and every
 user-facing string in the app is written to keep that unambiguous — especially
@@ -27,7 +28,7 @@ C:\Tools\.venv\Scripts\python.exe -m streamlit run app.py
 **Use `python -m pytest`, not bare `pytest`.** There is no `conftest.py` and no
 `tests/__init__.py`, so `import coastal_flood_explorer` only resolves because
 `python -m` puts the cwd on `sys.path`. The bare `pytest` executable fails
-collection on all 8 test modules. `tests/test_app_ui.py` also does
+collection across the test modules. `tests/test_app_ui.py` also does
 `AppTest.from_file("app.py")` with a relative path, so the cwd must be the repo
 root either way.
 
@@ -49,14 +50,15 @@ and is importable without Streamlit.
 | `api.py` | Hardened client for the current GeoMet view; retained and tested although the main UI now uses the archive. |
 | `archive.py` | Hardened Datamart directory/product client, amendment selection, merged collection, and raw bundle. |
 | `archive_dates.py` | Pure UTC 30-day issue-date window helper. |
+| `archive_range.py` | Inclusive max-30-day aggregation, per-date outcomes, global range caps, and strict raw range bundle. |
 | `chs.py` | Hardened CHS/IWLS station catalogue and observation/prediction client, parsing, chart data, QC labels, and raw bundle. |
-| `animation.py` | Pure Folium timeline preparation and rendering for fetched forecast validity times. |
+| `animation.py` | Pure Folium timeline preparation and rendering for one issuance's forecast validity times. |
 | `geometry.py` | Shapely: ROI parsing/repair, exact station-point ranking, bbox extraction, per-feature clipping. All GEOS contact is here. |
 | `properties.py` | Reading ECCC's dotted property paths, normalizing risk/contributors/datetimes, the DataFrame, the GeoJSON export. |
 | `filtering.py` | Pure `FilterCriteria` matching + `summarize_features`. No I/O, no Streamlit. |
 | `map_view.py` | Folium map, `Draw` toolbar, drawing rehydration, result layer, escaped popups/tooltips, legend, synthetic banner. |
 | `state.py` | `reconcile_drawings` — validates the raw `all_drawings` payload from streamlit-folium into a `DrawingState`. |
-| `synthetic.py` | Locally generated, loudly labelled fake features for UI work when an archive issue is empty. |
+| `synthetic.py` | Locally generated, loudly labelled fake features for UI work when an archive range is empty. |
 | `watch_and_run.py` | Dev supervisor. Not imported by the app. |
 
 ## Invariants — load-bearing, don't "simplify" them
@@ -91,14 +93,38 @@ and is importable without Streamlit.
   into Leaflet.Draw's `window.drawnItems` so they stay editable, guarded by a
   SHA-256 fingerprint of the serialized drawings so a rerun with unchanged
   drawings doesn't wipe an in-progress edit. Deleting either half loses the
-  user's ROI on the next rerun.
+  user's ROI on the next rerun. The `on_change` callback is primary, while the
+  returned-payload fallback conditionally reruns once if delete-then-redraw
+  exposed the preceding empty list; keep both paths.
 - **Archive files do not accept a bbox; the exact ROI is applied locally.**
-  `_cached_archive_fetch` downloads the selected date's static official files,
-  then `clip_feature_collection` honours the drawn polygon.
+  `_cached_archive_fetch` downloads one selected date's static official files.
+  The UI calls that day-level cache for every inclusive date, combines the
+  successful snapshots, and only then lets `clip_feature_collection` honour the
+  drawn polygon.
   `raw_feature_count` versus `clipped_feature_count` makes that visible.
 - **`_cached_archive_fetch` takes `(archive_root, YYYYMMDD)`, never a client
   object, requests session, Shapely geometry, or ROI.** The exact ROI stays
-  outside the cache and remains authoritative for clipping.
+  outside the cache and remains authoritative for clipping. Keep the cache
+  day-level, including safe failure outcomes, so overlapping ranges and
+  repeated temporary failures reuse the same bounded entries. A date-local 404
+  may be retained while later dates continue; a systemic network, rate-limit,
+  or service outcome must stop the remaining range requests.
+- **Archive range outcomes distinguish not-loaded from empty.** A valid empty
+  daily FeatureCollection counts as a successful date. Safe per-date failures
+  may produce a partial range only when at least one date succeeds, are stored
+  separately from geometry warnings, and appear in UI status and raw JSON.
+  Zero successful dates keep the previous dataset. Repeated cross-issue
+  features remain distinct; this is never described as an average. Enforce
+  cumulative range-wide product and feature limits while adding daily outcomes,
+  not only after every date has downloaded.
+- **Partial exports remain visibly partial away from the app.** Raw range JSON
+  carries the requested dates, per-date outcomes, and counts. A clipped GeoJSON
+  filename includes an explicit partial marker and loaded-versus-requested
+  count whenever any selected date was not loaded.
+- **Animation never combines separate issuances into one frame.** A range can
+  contain forecasts from many issue dates with the same validity time. Animate
+  one issuance at a time; grouping only by validity would visually conflate
+  forecasts that were produced at different times.
 - **`archive.py`'s hardening is deliberate**: HTTPS-only root, no redirects,
   strict same-directory filename allowlist, highest-amendment selection,
   response media/type checks, file and feature ceilings, GET-only retries, and
@@ -149,8 +175,8 @@ and is importable without Streamlit.
   Streamlit ≥1.60. Bumping any of the three needs the map exercised by hand.
 - **An empty result is normal.** Official archive files may contain zero
   features. That is not a bug and not an all-clear — `_render_results`
-  distinguishes an empty issue, polygons that do not intersect the ROI, and
-  features removed by filters.
+  distinguishes an empty successfully loaded range, not-loaded dates,
+  polygons that do not intersect the ROI, and features removed by filters.
 - **Halifax 00490 currently has predictions but no IWLS `wlo` series.** Do not
   label its line observed. Bedford Institute 00491 is the default because it
   supplies same-station observations and predictions in Halifax Harbour.

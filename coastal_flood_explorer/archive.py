@@ -74,7 +74,23 @@ class ECCCArchiveConfigurationError(ECCCArchiveError, ValueError):
 
 
 class ECCCArchiveRequestError(ECCCArchiveError):
-    """Raised when an archive resource cannot be retrieved."""
+    """Raised when an archive resource cannot be retrieved.
+
+    ``status_code`` preserves a safe HTTP status when one exists. ``systemic``
+    distinguishes service/network failures that should stop a multi-date range
+    from a date-local 404 that may be retained while later dates continue.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        systemic: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.systemic = systemic
 
 
 class ECCCArchiveDirectoryError(ECCCArchiveError):
@@ -456,7 +472,11 @@ class ECCCDatamartArchiveClient:
             status_code,
             url,
         )
-        raise ECCCArchiveRequestError(message)
+        raise ECCCArchiveRequestError(
+            message,
+            status_code=status_code,
+            systemic=status_code != 404,
+        )
 
 
 # Short compatibility name used by the first archive prototype.

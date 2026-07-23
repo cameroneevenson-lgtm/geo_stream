@@ -15,16 +15,29 @@ from streamlit_folium import st_folium
 from coastal_flood_explorer.animation import (
     AnimationError,
     build_forecast_animation,
+    filter_by_publication_time,
     prepare_timeline_data,
+    publication_times,
 )
+from coastal_flood_explorer.api import MAX_TOTAL_FEATURES
 from coastal_flood_explorer.archive import (
     ARCHIVE_BASE_URL,
+    MAX_ARCHIVE_FILES,
     ArchiveError,
     ArchiveFetchResult,
     ECCCDatamartArchiveClient,
-    raw_bundle_bytes,
+    ECCCArchiveRequestError,
 )
-from coastal_flood_explorer.archive_dates import recent_archive_window
+from coastal_flood_explorer.archive_dates import (
+    ArchiveDateWindow,
+    recent_archive_window,
+)
+from coastal_flood_explorer.archive_range import (
+    ArchiveRangeFetchResult,
+    combine_archive_range,
+    inclusive_archive_dates,
+    raw_range_bundle_bytes,
+)
 from coastal_flood_explorer.chs import (
     CHART_OBSERVED_COLUMN,
     CHART_PREDICTED_COLUMN,
@@ -93,13 +106,16 @@ STATE_DEFAULTS: dict[str, Any] = {
     "clipped_data": None,
     "last_requested_bbox": None,
     "last_requested_roi": None,
-    "last_requested_archive_date": None,
+    "last_requested_archive_range": None,
     "fetch_timestamp": None,
     "current_source_mode": None,
     "clip_warnings": [],
     "raw_feature_count": 0,
     "clipped_feature_count": 0,
     "archive_product_count": 0,
+    "archive_requested_date_count": 0,
+    "archive_successful_date_count": 0,
+    "archive_date_failures": [],
     "raw_archive_download": None,
     "chs_catalog": None,
     "chs_bundles": {},
@@ -112,12 +128,20 @@ STATE_DEFAULTS: dict[str, Any] = {
 def _cached_archive_fetch(
     archive_root: str,
     archive_date: str,
-) -> ArchiveFetchResult:
-    """Fetch one archive issue using only stable, serializable cache keys."""
+) -> tuple[ArchiveFetchResult | None, str | None, bool]:
+    """Fetch one issue and cache either its result or its safe failure."""
 
-    return ECCCDatamartArchiveClient(
-        archive_root=archive_root,
-    ).fetch_date(archive_date)
+    try:
+        result = ECCCDatamartArchiveClient(
+            archive_root=archive_root,
+        ).fetch_date(archive_date)
+    except ArchiveError as exc:
+        systemic = (
+            isinstance(exc, ECCCArchiveRequestError)
+            and exc.systemic
+        )
+        return None, str(exc), systemic
+    return result, None, False
 
 
 @st.cache_data(ttl=300, max_entries=4, show_spinner=False)
@@ -164,19 +188,32 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _apply_map_drawings_payload(payload: object) -> bool:
+    """Apply an authoritative component payload and report a state change."""
+
+    if not isinstance(payload, Mapping):
+        return False
+    drawings_value = payload.get("all_drawings")
+    if drawings_value is None:
+        return False
+    reconciled = reconcile_drawings(drawings_value)
+    drawings = list(reconciled.drawings)
+    changed = (
+        st.session_state.get("drawings") != drawings
+        or st.session_state.get("active_roi") != reconciled.active_roi
+        or st.session_state.get("drawing_warnings")
+        != list(reconciled.warnings)
+    )
+    st.session_state["drawings"] = drawings
+    st.session_state["active_roi"] = reconciled.active_roi
+    st.session_state["drawing_warnings"] = list(reconciled.warnings)
+    return changed
+
+
 def _sync_map_drawings() -> None:
     """Synchronize the component's authoritative drawing collection."""
 
-    payload = st.session_state.get(MAP_COMPONENT_KEY)
-    if not isinstance(payload, Mapping):
-        return
-    drawings_value = payload.get("all_drawings")
-    if drawings_value is None:
-        return
-    reconciled = reconcile_drawings(drawings_value)
-    st.session_state["drawings"] = list(reconciled.drawings)
-    st.session_state["active_roi"] = reconciled.active_roi
-    st.session_state["drawing_warnings"] = list(reconciled.warnings)
+    _apply_map_drawings_payload(st.session_state.get(MAP_COMPONENT_KEY))
 
 
 def _store_dataset(
@@ -187,19 +224,31 @@ def _store_dataset(
     roi: Mapping[str, Any],
     source_mode: str,
     warnings: tuple[str, ...],
-    archive_date: date | None = None,
+    archive_range: tuple[date, date] | None = None,
     archive_product_count: int = 0,
+    archive_requested_date_count: int = 0,
+    archive_successful_date_count: int = 0,
+    archive_date_failures: tuple[Mapping[str, str], ...] = (),
     raw_archive_download: bytes | None = None,
 ) -> None:
     if source_mode == "archive":
         st.session_state["last_successful_archive_response"] = raw_response
-        st.session_state["last_requested_archive_date"] = archive_date
+        st.session_state["last_requested_archive_range"] = archive_range
         st.session_state["archive_product_count"] = archive_product_count
+        st.session_state["archive_requested_date_count"] = (
+            archive_requested_date_count
+        )
+        st.session_state["archive_successful_date_count"] = (
+            archive_successful_date_count
+        )
+        st.session_state["archive_date_failures"] = [
+            dict(failure) for failure in archive_date_failures
+        ]
         st.session_state["raw_archive_download"] = raw_archive_download
     st.session_state["clipped_data"] = clipped_data
     st.session_state["last_requested_bbox"] = bbox
     st.session_state["last_requested_roi"] = copy.deepcopy(dict(roi))
-    st.session_state["fetch_timestamp"] = datetime.now(timezone.utc)
+    st.session_state["fetch_timestamp"] = _utc_now()
     st.session_state["current_source_mode"] = source_mode
     st.session_state["clip_warnings"] = list(warnings)
     raw_features = raw_response.get("features")
@@ -237,6 +286,110 @@ def _format_range(start: datetime | None, end: datetime | None) -> str:
     start_text = format_utc_datetime(start)
     end_text = format_utc_datetime(end)
     return start_text if start_text == end_text else f"{start_text} → {end_text}"
+
+
+def _normalize_archive_range(
+    value: object,
+    window: ArchiveDateWindow,
+) -> tuple[date, date] | None:
+    """Return a complete, ordered issue-date range inside the UTC window."""
+
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 2
+    ):
+        return None
+    start, end = value
+    if (
+        isinstance(start, datetime)
+        or isinstance(end, datetime)
+        or not isinstance(start, date)
+        or not isinstance(end, date)
+        or start > end
+        or not window.contains(start)
+        or not window.contains(end)
+    ):
+        return None
+    try:
+        inclusive_archive_dates(start, end)
+    except ArchiveError:
+        return None
+    return start, end
+
+
+def _archive_range_text(value: object) -> str:
+    """Return a human-readable inclusive date range."""
+
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 2
+        or not all(
+            isinstance(item, date) and not isinstance(item, datetime)
+            for item in value
+        )
+    ):
+        return "unknown range"
+    start, end = value
+    if start == end:
+        return start.isoformat()
+    return f"{start.isoformat()} through {end.isoformat()}"
+
+
+def _archive_range_stamp(value: object) -> str:
+    """Return a stable filename/key stamp for a loaded date range."""
+
+    if (
+        not isinstance(value, (tuple, list))
+        or len(value) != 2
+        or not all(
+            isinstance(item, date) and not isinstance(item, datetime)
+            for item in value
+        )
+    ):
+        return "unknown"
+    start, end = value
+    return f"{start:%Y%m%d}_{end:%Y%m%d}"
+
+
+def _archive_clipped_filename(
+    base_name: str,
+    archive_range: object,
+    requested_count: int,
+    successful_count: int,
+) -> str:
+    """Add range and partial-success provenance to a clipped filename."""
+
+    completeness_stamp = (
+        f"_partial_{successful_count}of{requested_count}"
+        if requested_count and successful_count < requested_count
+        else ""
+    )
+    return base_name.replace(
+        "eccc_coastal_flooding_",
+        (
+            f"eccc_coastal_flooding_{_archive_range_stamp(archive_range)}"
+            f"{completeness_stamp}_"
+        ),
+    )
+
+
+def _archive_failure_details(
+    result: ArchiveRangeFetchResult,
+) -> tuple[dict[str, str], ...]:
+    """Return safe diagnostics for issue dates that were not loaded."""
+
+    return tuple(
+        {
+            "issue_date": datetime.strptime(
+                outcome.issue_date,
+                "%Y%m%d",
+            ).date().isoformat(),
+            "error_type": outcome.error_type or "ArchiveDateFailure",
+            "message": outcome.error_message or "The date was not loaded.",
+        }
+        for outcome in result.outcomes
+        if not outcome.succeeded
+    )
 
 
 def _default_chs_station(
@@ -759,26 +912,45 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
         for warning in st.session_state.get("drawing_warnings", []):
             st.warning(warning)
 
-        archive_date = st.date_input(
-            "Archived ECCC issue date (UTC)",
-            value=archive_window.default,
+        archive_range_value = st.date_input(
+            "Archived ECCC issue-date range (UTC)",
+            value=(archive_window.oldest, archive_window.newest),
             min_value=archive_window.oldest,
             max_value=archive_window.newest,
-            key="selected_archive_date",
+            key="selected_archive_range",
             help=(
-                "ECCC currently retains about 30 days of forecast files. "
-                "These are archived forecasts, not observed flood history."
+                "Choose both endpoints of an inclusive range within ECCC's "
+                "rolling 30-day forecast archive."
             ),
         )
-        st.caption(
-            "Recent ECCC forecast archive (up to 30 days). Today's issue may "
-            "still be publishing. Changing this date does not contact ECCC "
-            "until you press the fetch button."
+        requested_range = _normalize_archive_range(
+            archive_range_value,
+            archive_window,
         )
+        range_day_count = (
+            len(inclusive_archive_dates(*requested_range))
+            if requested_range is not None
+            else 0
+        )
+        st.caption(
+            "The default covers all 30 retained issue dates. Fetching combines "
+            "each daily forecast snapshot; it is not a 30-day average or "
+            "observed flood history. Today's issue may still be publishing. "
+            "Changing the range does not contact ECCC."
+        )
+        if requested_range is None:
+            st.warning(
+                "Choose both a start date and an end date before fetching."
+            )
         fetch_archive = st.button(
-            "Fetch archived ECCC forecast",
+            (
+                f"Fetch ECCC archive range ({range_day_count} "
+                f"{'day' if range_day_count == 1 else 'days'})"
+                if requested_range is not None
+                else "Fetch ECCC archive range"
+            ),
             type="primary",
-            disabled=bbox is None,
+            disabled=bbox is None or requested_range is None,
             width="stretch",
         )
 
@@ -797,31 +969,192 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                 width="stretch",
             )
 
-        if fetch_archive and bbox is not None:
+        if (
+            fetch_archive
+            and bbox is not None
+            and requested_range is not None
+        ):
             active_roi = st.session_state.get("active_roi")
-            requested_date = (
-                archive_date
-                if isinstance(archive_date, date)
-                else archive_window.default
+            range_start, range_end = requested_range
+            requested_dates = inclusive_archive_dates(
+                range_start,
+                range_end,
             )
             fetch_progress = st.status(
-                "Fetching archived ECCC coastal-flood forecasts…",
+                "Fetching ECCC archive date range…",
                 expanded=True,
                 state="running",
             )
             try:
                 with fetch_progress:
-                    st.write(
-                        "Contacting the official ECCC Datamart archive for "
-                        f"{requested_date.isoformat()}…"
+                    date_progress = st.progress(
+                        0.0,
+                        text=(
+                            f"Preparing {len(requested_dates)} daily archive "
+                            "partition(s)…"
+                        ),
                     )
-                    archive_result = _cached_archive_fetch(
-                        ARCHIVE_BASE_URL,
-                        requested_date.strftime("%Y%m%d"),
+                    date_message = st.empty()
+                    successes: list[
+                        tuple[str, ArchiveFetchResult]
+                    ] = []
+                    failures: list[tuple[str, str]] = []
+                    product_urls: set[str] = set()
+                    document_urls: set[str] = set()
+                    range_feature_count = 0
+                    for index, issue_date in enumerate(
+                        requested_dates,
+                        start=1,
+                    ):
+                        display_date = datetime.strptime(
+                            issue_date,
+                            "%Y%m%d",
+                        ).date().isoformat()
+                        date_message.write(
+                            f"Checking {display_date} "
+                            f"({index}/{len(requested_dates)})…"
+                        )
+                        (
+                            daily_result,
+                            daily_error,
+                            systemic_failure,
+                        ) = _cached_archive_fetch(
+                            ARCHIVE_BASE_URL,
+                            issue_date,
+                        )
+                        if daily_result is None:
+                            failures.append(
+                                (
+                                    issue_date,
+                                    daily_error
+                                    or "The archive date could not be loaded.",
+                                )
+                            )
+                            if systemic_failure:
+                                skipped_message = (
+                                    "Not attempted after a systemic ECCC "
+                                    "archive service failure."
+                                )
+                                failures.extend(
+                                    (remaining_date, skipped_message)
+                                    for remaining_date in requested_dates[index:]
+                                )
+                                date_progress.progress(
+                                    1.0,
+                                    text=(
+                                        "Stopped the remaining dates after "
+                                        "an ECCC service failure"
+                                    ),
+                                )
+                                break
+                        else:
+                            daily_features = daily_result.collection.get(
+                                "features"
+                            )
+                            if not isinstance(daily_features, list):
+                                raise ArchiveError(
+                                    "An ECCC archive date returned an invalid "
+                                    "FeatureCollection. The previous results "
+                                    "were kept."
+                                )
+                            next_product_urls = product_urls | {
+                                product.url
+                                for product in daily_result.products
+                            }
+                            next_document_urls = document_urls | {
+                                document.product.url
+                                for document in daily_result.documents
+                            }
+                            next_feature_count = (
+                                range_feature_count + len(daily_features)
+                            )
+                            limit_message: str | None = None
+                            if (
+                                len(next_product_urls) > MAX_ARCHIVE_FILES
+                                or len(next_document_urls) > MAX_ARCHIVE_FILES
+                            ):
+                                limit_message = (
+                                    "Not included because the selected range "
+                                    f"would exceed the {MAX_ARCHIVE_FILES}-file "
+                                    "safety limit."
+                                )
+                            elif next_feature_count > MAX_TOTAL_FEATURES:
+                                limit_message = (
+                                    "Not included because the selected range "
+                                    "would exceed the "
+                                    f"{MAX_TOTAL_FEATURES}-feature safety limit."
+                                )
+                            if limit_message is not None:
+                                failures.append((issue_date, limit_message))
+                                skipped_message = (
+                                    "Not attempted after the archive range "
+                                    "reached a safety limit."
+                                )
+                                failures.extend(
+                                    (remaining_date, skipped_message)
+                                    for remaining_date in requested_dates[index:]
+                                )
+                                date_progress.progress(
+                                    1.0,
+                                    text=(
+                                        "Stopped the remaining dates at the "
+                                        "archive range safety limit"
+                                    ),
+                                )
+                                break
+
+                            successes.append((issue_date, daily_result))
+                            product_urls = next_product_urls
+                            document_urls = next_document_urls
+                            range_feature_count = next_feature_count
+                            reached_limit = (
+                                len(product_urls) == MAX_ARCHIVE_FILES
+                                or len(document_urls) == MAX_ARCHIVE_FILES
+                                or range_feature_count == MAX_TOTAL_FEATURES
+                            )
+                            if reached_limit and index < len(requested_dates):
+                                skipped_message = (
+                                    "Not attempted because the archive range "
+                                    "reached a safety limit."
+                                )
+                                failures.extend(
+                                    (remaining_date, skipped_message)
+                                    for remaining_date in requested_dates[index:]
+                                )
+                                date_progress.progress(
+                                    1.0,
+                                    text=(
+                                        "Stopped the remaining dates at the "
+                                        "archive range safety limit"
+                                    ),
+                                )
+                                break
+                        date_progress.progress(
+                            index / len(requested_dates),
+                            text=(
+                                f"Checked {index} of "
+                                f"{len(requested_dates)} issue dates"
+                            ),
+                        )
+
+                    archive_result = combine_archive_range(
+                        range_start,
+                        range_end,
+                        successes=successes,
+                        failures=failures,
+                    )
+                    if archive_result.successful_date_count == 0:
+                        raise ArchiveError(
+                            "None of the selected ECCC archive dates could be "
+                            "loaded. The previous results were kept."
+                        )
+                    date_message.write(
+                        f"Loaded {archive_result.successful_date_count} of "
+                        f"{archive_result.requested_date_count} issue dates."
                     )
                     st.write(
                         f"Validated {len(archive_result.products)} archived "
-                        "forecast file(s)."
+                        "forecast file(s) across the range."
                     )
                     st.write(
                         "Clipping their polygons locally to the exact region…"
@@ -837,16 +1170,33 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                     roi=active_roi,
                     source_mode="archive",
                     warnings=clipped.warnings,
-                    archive_date=requested_date,
+                    archive_range=requested_range,
                     archive_product_count=len(archive_result.products),
-                    raw_archive_download=raw_bundle_bytes(
-                        archive_result,
-                        requested_date,
+                    archive_requested_date_count=(
+                        archive_result.requested_date_count
                     ),
+                    archive_successful_date_count=(
+                        archive_result.successful_date_count
+                    ),
+                    archive_date_failures=_archive_failure_details(
+                        archive_result
+                    ),
+                    raw_archive_download=raw_range_bundle_bytes(
+                        archive_result,
+                    ),
+                )
+                failed_count = archive_result.failed_date_count
+                range_completion = (
+                    f"loaded partially with {failed_count} "
+                    f"{'date' if failed_count == 1 else 'dates'} not loaded"
+                    if failed_count
+                    else "fetch complete"
                 )
                 fetch_progress.update(
                     label=(
-                        "ECCC archive fetch complete — "
+                        f"ECCC archive range {range_completion} — "
+                        f"{archive_result.successful_date_count}/"
+                        f"{archive_result.requested_date_count} date(s), "
                         f"{len(archive_result.products)} file(s), "
                         f"{st.session_state['raw_feature_count']} feature(s), "
                         f"{st.session_state['clipped_feature_count']} intersected "
@@ -962,9 +1312,9 @@ def _render_source_status(stale: bool) -> None:
     timestamp = st.session_state.get("fetch_timestamp")
     if source_mode is None:
         st.info(
-            "Draw a region, choose a recent archive issue date, then "
-            "explicitly fetch the ECCC forecast or generate synthetic test "
-            "data."
+            "Draw a region, choose a recent archive issue-date range, then "
+            "explicitly fetch those ECCC forecast snapshots or generate "
+            "synthetic test data."
         )
         return
 
@@ -993,29 +1343,61 @@ def _render_source_status(stale: bool) -> None:
         product_count = int(
             st.session_state.get("archive_product_count", 0)
         )
-        loaded_date = st.session_state.get("last_requested_archive_date")
-        loaded_date_text = (
-            loaded_date.isoformat()
-            if isinstance(loaded_date, date)
-            else "unknown date"
+        requested_date_count = int(
+            st.session_state.get("archive_requested_date_count", 0)
         )
+        successful_date_count = int(
+            st.session_state.get("archive_successful_date_count", 0)
+        )
+        loaded_range = st.session_state.get(
+            "last_requested_archive_range"
+        )
+        loaded_range_text = _archive_range_text(loaded_range)
         st.success(
-            f"Loaded ECCC archive issue {loaded_date_text}"
+            f"Loaded ECCC archive range {loaded_range_text}"
             + (f" · Retrieved {timestamp_text}" if timestamp_text else "")
+            + (
+                f" · {successful_date_count}/{requested_date_count} "
+                "issue date(s)"
+            )
             + f" · {product_count} file(s) · {raw_count} feature(s) · "
             f"{clipped_count} intersected the exact region"
         )
-        selected_date = st.session_state.get("selected_archive_date")
+        date_failures = st.session_state.get("archive_date_failures", [])
+        if isinstance(date_failures, list) and date_failures:
+            st.warning(
+                f"{len(date_failures)} selected archive "
+                f"{'date was' if len(date_failures) == 1 else 'dates were'} "
+                "not loaded. The displayed range contains only the "
+                "successfully loaded issue dates."
+            )
+            with st.expander("Archive dates not loaded"):
+                for failure in date_failures:
+                    if not isinstance(failure, Mapping):
+                        continue
+                    issue_date = str(
+                        failure.get("issue_date", "unknown date")
+                    )
+                    message = str(
+                        failure.get("message", "The date was not loaded.")
+                    )
+                    st.write(f"- {issue_date}: {message}")
+
+        selected_range = _normalize_archive_range(
+            st.session_state.get("selected_archive_range"),
+            recent_archive_window(),
+        )
         if (
-            isinstance(loaded_date, date)
-            and isinstance(selected_date, date)
-            and loaded_date != selected_date
+            selected_range is not None
+            and isinstance(loaded_range, (tuple, list))
+            and tuple(loaded_range) != selected_range
         ):
             st.info(
-                f"The date selector is now {selected_date.isoformat()}, but "
-                f"the displayed results are still the loaded "
-                f"{loaded_date.isoformat()} issue. Press fetch to replace "
-                "them."
+                f"The range selector is now "
+                f"{_archive_range_text(selected_range)}, but the displayed "
+                f"results are still the loaded "
+                f"{_archive_range_text(loaded_range)} range. Press fetch to "
+                "replace them."
             )
     if stale:
         st.warning(
@@ -1036,14 +1418,16 @@ def _render_results(
 
     if source_mode == "archive" and raw_count == 0:
         st.info(
-            "The selected archived issue contained forecast files, but they "
-            "published no coastal-flood-risk polygons. This is not an "
-            "all-clear and does not describe observed flood history."
+            "The successfully loaded dates in this archive range contained "
+            "forecast files, but they published no coastal-flood-risk "
+            "polygons. This is not an all-clear and does not describe "
+            "observed flood history."
         )
     elif source_mode == "archive" and clipped_count == 0:
         st.info(
-            "The archived issue contained coastal-flood-risk polygons, but "
-            "none produced a usable intersection with the exact drawn region."
+            "The loaded archive range contained coastal-flood-risk polygons, "
+            "but none produced a usable intersection with the exact drawn "
+            "region."
         )
     elif clipped_count > 0 and summary.feature_count == 0:
         st.info("No fetched features match the current filters.")
@@ -1096,6 +1480,19 @@ def _render_results(
             "eccc_coastal_flooding_",
             "synthetic_test_coastal_flooding_",
         )
+    elif source_mode == "archive":
+        requested_count = int(
+            st.session_state.get("archive_requested_date_count", 0)
+        )
+        successful_count = int(
+            st.session_state.get("archive_successful_date_count", 0)
+        )
+        download_name = _archive_clipped_filename(
+            download_name,
+            st.session_state.get("last_requested_archive_range"),
+            requested_count,
+            successful_count,
+        )
     download_columns = st.columns(2 if source_mode == "archive" else 1)
     download_columns[0].download_button(
         "Download clipped GeoJSON",
@@ -1111,11 +1508,8 @@ def _render_results(
         width="stretch",
     )
     if source_mode == "archive":
-        loaded_date = st.session_state.get("last_requested_archive_date")
-        date_stamp = (
-            loaded_date.strftime("%Y%m%d")
-            if isinstance(loaded_date, date)
-            else "unknown"
+        date_stamp = _archive_range_stamp(
+            st.session_state.get("last_requested_archive_range")
         )
         download_columns[1].download_button(
             "Download raw fetched ECCC JSON",
@@ -1124,7 +1518,8 @@ def _render_results(
             mime="application/json",
             disabled=st.session_state.get("raw_archive_download") is None,
             help=(
-                "The decoded per-file ECCC responses bundled before ROI "
+                "The decoded per-file ECCC responses, requested date range, "
+                "and any not-loaded date diagnostics bundled before ROI "
                 "clipping or filters."
             ),
             width="stretch",
@@ -1156,8 +1551,37 @@ def _render_animation(
         st.session_state.get("clipped_data"),
         animation_criteria,
     )
+    issuances = publication_times(animation_data)
+    if not issuances:
+        st.caption(
+            "An animation becomes available when matching archive features "
+            "include a valid forecast publication time."
+        )
+        return
+
+    range_key = _archive_range_stamp(
+        st.session_state.get("last_requested_archive_range")
+    )
+    issuance_key = f"forecast-animation-issuance-{range_key}"
+    issuance_options = tuple(reversed(issuances))
+    if st.session_state.get(issuance_key) not in issuance_options:
+        st.session_state[issuance_key] = issuance_options[0]
+    selected_issuance = st.selectbox(
+        "Forecast issuance (UTC)",
+        issuance_options,
+        key=issuance_key,
+        format_func=format_utc_datetime,
+        help=(
+            "Each animation contains exactly one published forecast issuance "
+            "so forecasts from different issue times are never overlaid."
+        ),
+    )
+    issuance_data = filter_by_publication_time(
+        animation_data,
+        selected_issuance,
+    )
     try:
-        timeline_data = prepare_timeline_data(animation_data)
+        timeline_data = prepare_timeline_data(issuance_data)
     except AnimationError:
         return
 
@@ -1171,8 +1595,9 @@ def _render_animation(
 
     st.subheader("Forecast animation")
     st.caption(
-        "This animates validity times within the loaded archived issue. It "
-        "does not average or automatically download all 30 retained days."
+        f"Animating validity times from the forecast published "
+        f"{format_utc_datetime(selected_issuance)}. Other issuances in the "
+        "loaded date range are excluded, and no averaging is performed."
     )
     if not st.toggle(
         "Show forecast animation",
@@ -1183,22 +1608,17 @@ def _render_animation(
 
     try:
         animation_map = build_forecast_animation(
-            animation_data,
+            issuance_data,
             roi=st.session_state.get("last_requested_roi"),
         )
     except AnimationError as exc:
         st.warning(str(exc))
         return
 
-    loaded_date = st.session_state.get("last_requested_archive_date")
-    date_key = (
-        loaded_date.strftime("%Y%m%d")
-        if isinstance(loaded_date, date)
-        else "unknown"
-    )
+    issuance_stamp = selected_issuance.strftime("%Y%m%dT%H%M%SZ")
     st_folium(
         animation_map,
-        key=f"forecast-animation-{date_key}",
+        key=f"forecast-animation-{range_key}-{issuance_stamp}",
         height=520,
         use_container_width=True,
         returned_objects=[],
@@ -1277,7 +1697,7 @@ def main() -> None:
         selected_station_id=selected_chs_station_id,
         bundle=chs_bundle,
     )
-    st_folium(
+    map_payload = st_folium(
         base_map,
         key=MAP_COMPONENT_KEY,
         height=650,
@@ -1290,6 +1710,18 @@ def main() -> None:
         ],
         layer_control=build_layer_control(),
         on_change=_sync_map_drawings,
+    )
+    # Custom-component callbacks normally update state before this rerun.
+    # Applying the returned payload as a fallback closes the delete-then-draw
+    # race where the callback can momentarily expose the preceding empty list.
+    if _apply_map_drawings_payload(map_payload):
+        st.rerun()
+    st.markdown(
+        (
+            "<div id='geo-stream-map-scroll-space' aria-hidden='true' "
+            "style='height:38vh;min-height:280px'></div>"
+        ),
+        unsafe_allow_html=True,
     )
 
     _render_animation(criteria, stale=stale)

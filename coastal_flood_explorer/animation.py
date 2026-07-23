@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
@@ -15,6 +16,7 @@ from shapely.geometry import mapping, shape
 from shapely.geometry.base import BaseGeometry
 
 from coastal_flood_explorer.properties import (
+    PUBLICATION_PROPERTY,
     RISK_COLOURS,
     RISK_PROPERTY,
     VALIDITY_PROPERTY,
@@ -128,6 +130,10 @@ def _safe_polygon(
 
 
 def _collection_features(collection: Mapping[str, Any]) -> list[Any]:
+    if not isinstance(collection, Mapping):
+        raise AnimationError(
+            "Animation data must be a GeoJSON FeatureCollection."
+        )
     if collection.get("type") != "FeatureCollection":
         raise AnimationError("Animation data must be a GeoJSON FeatureCollection.")
     features = collection.get("features")
@@ -144,6 +150,53 @@ def _combined_bounds(
     maximum_x = max(feature.bounds[2] for feature in features)
     maximum_y = max(feature.bounds[3] for feature in features)
     return ((minimum_y, minimum_x), (maximum_y, maximum_x))
+
+
+def publication_times(
+    collection: Mapping[str, Any],
+) -> tuple[datetime, ...]:
+    """Return sorted unique UTC publication times from source features."""
+
+    times: set[datetime] = set()
+    for feature in _collection_features(collection):
+        if not isinstance(feature, Mapping):
+            continue
+        properties = feature.get("properties")
+        if not isinstance(properties, Mapping):
+            continue
+        publication = parse_utc_datetime(
+            get_property(properties, PUBLICATION_PROPERTY)
+        )
+        if publication is not None:
+            times.add(publication)
+    return tuple(sorted(times))
+
+
+def filter_by_publication_time(
+    collection: Mapping[str, Any],
+    publication_time: object,
+) -> dict[str, Any]:
+    """Copy features from exactly one normalized UTC forecast issuance."""
+
+    selected = parse_utc_datetime(publication_time)
+    if selected is None:
+        raise AnimationError(
+            "A valid forecast publication time is required for animation."
+        )
+
+    features: list[dict[str, Any]] = []
+    for feature in _collection_features(collection):
+        if not isinstance(feature, Mapping):
+            continue
+        properties = feature.get("properties")
+        if not isinstance(properties, Mapping):
+            continue
+        publication = parse_utc_datetime(
+            get_property(properties, PUBLICATION_PROPERTY)
+        )
+        if publication == selected:
+            features.append(deepcopy(dict(feature)))
+    return {"type": "FeatureCollection", "features": features}
 
 
 def prepare_timeline_data(collection: Mapping[str, Any]) -> TimelineData:

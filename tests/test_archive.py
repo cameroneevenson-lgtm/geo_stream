@@ -549,24 +549,27 @@ def test_fetch_rejects_unsupported_product_content_type() -> None:
 
 
 @pytest.mark.parametrize(
-    ("status_code", "message_fragment"),
+    ("status_code", "message_fragment", "systemic"),
     [
-        (404, "retention window"),
-        (429, "limiting"),
-        (500, "temporarily unavailable"),
-        (400, "rejected"),
-        (302, "unexpected"),
+        (404, "retention window", False),
+        (429, "limiting", True),
+        (500, "temporarily unavailable", True),
+        (400, "rejected", True),
+        (302, "unexpected", True),
     ],
 )
 def test_request_translates_http_errors(
     status_code: int,
     message_fragment: str,
+    systemic: bool,
 ) -> None:
     session = FakeSession(
         FakeResponse(status_code=status_code, content_type="text/plain")
     )
-    with pytest.raises(ECCCArchiveRequestError, match=message_fragment):
+    with pytest.raises(ECCCArchiveRequestError, match=message_fragment) as exc:
         ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
+    assert exc.value.status_code == status_code
+    assert exc.value.systemic is systemic
 
 
 @pytest.mark.parametrize(
@@ -585,6 +588,8 @@ def test_request_translates_network_errors(
     with pytest.raises(ECCCArchiveRequestError, match=message_fragment) as exc:
         ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
     assert "details" not in str(exc.value)
+    assert exc.value.status_code is None
+    assert exc.value.systemic is True
 
 
 def test_discover_stops_when_directory_has_too_many_logical_products() -> None:

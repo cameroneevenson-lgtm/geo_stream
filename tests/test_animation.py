@@ -12,7 +12,9 @@ from coastal_flood_explorer.animation import (
     CANADA_NAVIGATION_BOUNDS,
     LAST_FRAME_DURATION,
     build_forecast_animation,
+    filter_by_publication_time,
     prepare_timeline_data,
+    publication_times,
 )
 from coastal_flood_explorer.properties import RISK_COLOURS
 
@@ -36,24 +38,137 @@ def _feature(
     validity: object,
     risk: object = 1,
     *,
+    publication: object | None = None,
     west: float = -64.0,
     south: float = 44.5,
 ) -> dict:
+    properties = {
+        "validity_datetime": validity,
+        "metobject": {"risk": {"value": risk}},
+        "domain": "<script>alert('source')</script>",
+        "unneeded": {"large": ["source", "property"]},
+    }
+    if publication is not None:
+        properties["publication_datetime"] = publication
     return {
         "type": "Feature",
         "id": "<source-id>",
         "geometry": _polygon(west, south),
-        "properties": {
-            "validity_datetime": validity,
-            "metobject": {"risk": {"value": risk}},
-            "domain": "<script>alert('source')</script>",
-            "unneeded": {"large": ["source", "property"]},
-        },
+        "properties": properties,
     }
 
 
 def _collection(*features: object) -> dict:
     return {"type": "FeatureCollection", "features": list(features)}
+
+
+def test_publication_times_are_normalized_sorted_unique_and_nonmutating() -> None:
+    source = _collection(
+        _feature(
+            "2026-07-15T00:00:00Z",
+            publication="2026-07-14T20:00:00-04:00",
+        ),
+        _feature(
+            "2026-07-14T18:00:00Z",
+            publication="2026-07-14T12:00:00Z",
+        ),
+        _feature(
+            "2026-07-14T19:00:00Z",
+            publication="2026-07-14T12:00:00+00:00",
+        ),
+        _feature(
+            "2026-07-14T20:00:00Z",
+            publication="not-a-time",
+        ),
+        None,
+    )
+    original = deepcopy(source)
+
+    result = publication_times(source)
+
+    assert result == (
+        datetime(2026, 7, 14, 12, tzinfo=timezone.utc),
+        datetime(2026, 7, 15, 0, tzinfo=timezone.utc),
+    )
+    assert source == original
+
+
+def test_filter_by_publication_time_is_exact_and_returns_fresh_features() -> None:
+    selected = _feature(
+        "2026-07-15T00:00:00Z",
+        3,
+        publication="2026-07-14T20:00:00-04:00",
+    )
+    same_instant = _feature(
+        "2026-07-15T06:00:00Z",
+        4,
+        publication="2026-07-15T00:00:00Z",
+        west=-65.0,
+    )
+    other = _feature(
+        "2026-07-14T18:00:00Z",
+        1,
+        publication="2026-07-14T12:00:00Z",
+    )
+    source = _collection(selected, same_instant, other, None)
+    original = deepcopy(source)
+
+    filtered = filter_by_publication_time(
+        source,
+        datetime(2026, 7, 15, tzinfo=timezone.utc),
+    )
+
+    assert filtered["type"] == "FeatureCollection"
+    risks = [
+        feature["properties"]["metobject"]["risk"]["value"]
+        for feature in filtered["features"]
+    ]
+    assert risks == [
+        3,
+        4,
+    ]
+    assert filtered["features"][0] is not selected
+    filtered["features"][0]["properties"]["unneeded"]["large"].append("changed")
+    assert source == original
+
+
+def test_publication_filter_prevents_same_validity_from_mixing_issuances() -> None:
+    validity = "2026-07-15T12:00:00Z"
+    earlier = "2026-07-14T12:00:00Z"
+    later = "2026-07-15T00:00:00Z"
+    source = _collection(
+        _feature(validity, 1, publication=earlier),
+        _feature(validity, 4, publication=later, west=-65.0),
+    )
+
+    filtered = filter_by_publication_time(source, later)
+    prepared = prepare_timeline_data(filtered)
+
+    assert len(filtered["features"]) == 1
+    assert len(prepared.feature_collection["features"]) == 1
+    assert prepared.feature_collection["features"][0]["properties"]["risk"] == (
+        "Extreme"
+    )
+
+
+@pytest.mark.parametrize(
+    ("collection", "publication", "message"),
+    [
+        (None, "2026-07-14T12:00:00Z", "FeatureCollection"),
+        ({}, "2026-07-14T12:00:00Z", "FeatureCollection"),
+        (_collection(), "not-a-time", "valid forecast publication time"),
+    ],
+)
+def test_publication_helpers_reject_invalid_inputs(
+    collection: object,
+    publication: object,
+    message: str,
+) -> None:
+    with pytest.raises(AnimationError, match=message):
+        filter_by_publication_time(
+            collection,  # type: ignore[arg-type]
+            publication,
+        )
 
 
 @pytest.mark.parametrize(

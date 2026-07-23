@@ -35,6 +35,9 @@ coastal-flood products are published.
 6. Sidebar filters update the map, summary, table, and download without another
    network request.
 
+Map navigation is constrained to Canada's geographic extent. The basemap does
+not wrap or permit zooming out to a worldwide view.
+
 The application keeps its network client, geometry processing, property
 normalization, filtering, synthetic generation, and Folium rendering in
 separate modules under `coastal_flood_explorer/`. Streamlit session state holds

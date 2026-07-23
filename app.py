@@ -47,7 +47,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 
 LOGGER = logging.getLogger("geo_stream.app")
-MAP_COMPONENT_KEY = "coastal-flood-map-v2"
+MAP_COMPONENT_KEY = "coastal-flood-map-v3"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -166,7 +166,7 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
         if bbox is None:
             st.info(
                 "No region selected yet. Use the polygon or rectangle button "
-                "in the map's upper-left drawing toolbar."
+                "in the map's upper-left drawing toolbar to draw within Canada."
             )
         else:
             st.success("Region selected — the data actions are ready.")
@@ -440,8 +440,8 @@ def main() -> None:
 
     st.title("Geo Stream Coastal Flood Explorer")
     st.caption(
-        "Draw a coastal region, fetch ECCC polygons for its bounding box, "
-        "then explore the results clipped to the exact drawing."
+        "Draw a Canadian coastal region, fetch ECCC polygons for its bounding "
+        "box, then explore the results clipped to the exact drawing."
     )
     st.warning(
         "Exploratory visualization only. Official ECCC weather alerts and "
@@ -458,8 +458,10 @@ def main() -> None:
     _render_source_status(stale)
 
     synthetic = st.session_state.get("current_source_mode") == "synthetic"
-    st.subheader("Draw your region")
+    st.subheader("Draw your region in Canada")
     st.info(
+        "The map is locked to the Canadian extent. Pan and zoom within Canada, "
+        "then use the drawing toolbar.  \n"
         "**Rectangle:** choose the square button in the map's upper-left "
         "toolbar, then click, drag, and release.  \n"
         "**Polygon:** choose the polygon button, click each corner, then click "

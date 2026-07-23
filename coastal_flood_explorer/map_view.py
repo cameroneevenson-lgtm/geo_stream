@@ -25,8 +25,10 @@ from coastal_flood_explorer.properties import (
 )
 
 
-DEFAULT_CENTER = (49.0, -62.0)
-DEFAULT_ZOOM = 5
+CANADA_BOUNDS = ((41.5, -141.0), (83.2, -52.0))
+DEFAULT_CENTER = (58.0, -96.0)
+DEFAULT_ZOOM = 4
+MIN_ZOOM = 4
 ROI_COLOUR = "#2563eb"
 UNKNOWN_COLOUR = "#64748b"
 
@@ -224,11 +226,26 @@ def build_base_map() -> folium.Map:
     map_object = folium.Map(
         location=DEFAULT_CENTER,
         zoom_start=DEFAULT_ZOOM,
-        tiles="OpenStreetMap",
+        tiles=None,
+        min_zoom=MIN_ZOOM,
+        minZoom=MIN_ZOOM,
+        min_lat=CANADA_BOUNDS[0][0],
+        max_lat=CANADA_BOUNDS[1][0],
+        min_lon=CANADA_BOUNDS[0][1],
+        max_lon=CANADA_BOUNDS[1][1],
+        max_bounds=True,
+        max_bounds_viscosity=1.0,
+        world_copy_jump=False,
         zoom_control=True,
         control_scale=True,
         prefer_canvas=True,
     )
+    folium.TileLayer(
+        "OpenStreetMap",
+        name="OpenStreetMap",
+        min_zoom=MIN_ZOOM,
+        no_wrap=True,
+    ).add_to(map_object)
     roi_group = folium.FeatureGroup(
         name="Region of interest",
         control=True,

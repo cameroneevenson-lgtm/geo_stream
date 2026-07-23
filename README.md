@@ -1,8 +1,10 @@
 # Geo Stream Coastal Flood Explorer
 
-Geo Stream is an exploratory Streamlit application for viewing Environment and
-Climate Change Canada (ECCC) Coastal Flooding Risk Index polygons within a
-user-drawn region of interest.
+Geo Stream is an exploratory Streamlit application for viewing recent Canadian
+Hydrographic Service (CHS) water levels and optional Environment and Climate
+Change Canada (ECCC) Coastal Flooding Risk Index polygons. A user-drawn region
+automatically selects an official water-level station and also defines the
+exact area used for ECCC polygon clipping.
 
 > **Screenshot placeholder:** add an application screenshot here after the
 > first visual release.
@@ -10,7 +12,34 @@ user-drawn region of interest.
 The application is not an official warning service. Official ECCC weather
 alerts and emergency guidance always take precedence.
 
-## Data source
+## Data sources
+
+### CHS water levels
+
+The always-visible water-level panel uses the official [Integrated Water Level
+System (IWLS) API](https://api-sine.dfo-mpo.gc.ca/swagger-ui/index.html). Before
+a region is drawn, it defaults to Bedford Institute (00491) in Halifax Harbour.
+After a polygon or rectangle is drawn, Geo Stream automatically selects an
+operating CHS observation station inside the exact shape. If none is inside, it
+uses the nearest station and reports how far that point lies outside the ROI.
+
+The chart requests the station's recent official observations and, when that
+station publishes them, its tide predictions. Heights are in metres relative
+to the station's local datum; values from different stations must not be
+treated as directly interchangeable. CHS quality-control flags and preliminary
+status remain visible. Station measurements are point samples, not flood-depth
+or street-level inundation maps. If a newly selected station has no usable
+recent series or its request fails, the app keeps the most recently successful
+station bundle visible and labels it as fallback data rather than silently
+presenting it as data for the drawn region.
+
+CHS documents the service, licence, quality flags, and request limits on its
+[web-services page](https://www.tides.gc.ca/en/web-services-offered-canadian-hydrographic-service).
+The application caches the station catalogue and 15-minute time series so map
+reruns stay within the published limit of 3 requests per second and 30 per
+minute.
+
+### ECCC coastal-flood forecasts
 
 The application uses ECCC's official rolling MSC Datamart forecast archive:
 
@@ -30,23 +59,29 @@ documents the rolling retention window.
 
 ## How it works
 
-1. In the map's upper-left toolbar, choose the rectangle button and
+1. On initial load, the app shows recent CHS observations and predictions from
+   Bedford Institute so the water-level view is useful before any drawing.
+2. In the map's upper-left toolbar, choose the rectangle button and
    click-drag-release, or choose the polygon button, click each corner, and
    click the first point again to finish.
-2. To change a region, choose the pencil or trash button, make the change, and
+3. The exact drawing automatically selects a CHS observation station inside it,
+   or the nearest station when none falls inside. The station selector remains
+   available for a deliberate override.
+4. To change a region, choose the pencil or trash button, make the change, and
    choose **Save**.
-3. Choose an **Archived ECCC issue date (UTC)** from the latest 30 days and
-   press **Fetch archived ECCC forecast**.
-4. Geo Stream lists that official Datamart directory, keeps the highest
+5. Optionally choose an **Archived ECCC issue date (UTC)** from the latest 30
+   days and press **Fetch archived ECCC forecast**.
+6. Geo Stream lists that official Datamart directory, keeps the highest
    amendment of each product, downloads its static GeoJSON files, and combines
    their features. Archive files do not support a server-side ROI or bbox.
-5. Every source geometry is intersected locally with the exact drawn ROI.
-6. Sidebar filters update the map, summary, table, and clipped download without
+7. Every source geometry is intersected locally with the exact drawn ROI.
+8. Sidebar filters update the map, summary, table, and clipped download without
    another network request.
-7. **Download raw fetched ECCC JSON** supplies the per-file responses before
-   clipping or filtering. When at least two validity times intersect the ROI,
-   the optional timeline animates those forecast frames within the loaded
-   issue; it does not fetch or average all 30 retained days.
+9. Raw-download actions preserve the decoded CHS time-series documents and the
+   per-file ECCC responses before local display processing. When at least two
+   ECCC validity times intersect the ROI, the optional timeline animates those
+   forecast frames within the loaded issue; it does not fetch or average all
+   30 retained days.
 
 Map navigation stays Canada-focused but includes a buffer around the national
 extent so every coast and northern area can be brought fully into view. The
@@ -55,8 +90,9 @@ basemap does not wrap around the world.
 The application keeps its network client, geometry processing, property
 normalization, filtering, synthetic generation, and Folium rendering in
 separate modules under `coastal_flood_explorer/`. Streamlit session state holds
-the current drawing and the last successful dataset; archive results are cached
-for five minutes by official archive root and UTC issue date.
+the current drawing, recent CHS bundles, and the last successful ECCC dataset.
+CHS catalogue/time-series results and ECCC archive results use bounded caches
+so drawing and filter reruns do not repeat network requests.
 
 ## Installation
 
@@ -144,10 +180,10 @@ is zero, or that an all-clear has been issued.
 ## Tests
 
 ```text
-pytest
+python -m pytest
 ```
 
-Tests mock all HTTP activity and never depend on the ECCC service.
+Tests mock all HTTP activity and never depend on CHS or ECCC availability.
 
 For an additional syntax check:
 
@@ -159,12 +195,17 @@ python -m compileall app.py coastal_flood_explorer watch_and_run.py
 
 - The ECCC collection is experimental and its schema or availability can
   change.
+- CHS stations measure water level at points. The selected station may be
+  outside a small or inland ROI, which the app reports explicitly.
+- Water-level datums and quality flags matter; do not directly compare absolute
+  heights from different stations without a documented datum conversion.
 - The public raw archive is a rolling window of about 30 days. It is not a
   long-term historical or observed-flood database.
 - Folium drawing state is session-local and is not shared between users.
 - There is no long-term database, authentication layer, or persistent
   storage.
-- OpenStreetMap tiles, ECCC Datamart, and quick tunnels require internet access.
+- OpenStreetMap tiles, CHS IWLS, ECCC Datamart, and quick tunnels require
+  internet access.
 - A quick tunnel is appropriate only for temporary development and review.
 
 ## Possible future architecture
@@ -177,7 +218,7 @@ Streamlit process.
 
 ## Disclaimer
 
-This application is an exploratory visualization of publicly available ECCC
-data. It is not an official forecast, warning, emergency notification, or
+This application is an exploratory visualization of publicly available CHS and
+ECCC data. It is not an official forecast, warning, emergency notification, or
 safety determination. Consult official ECCC weather alerts and follow guidance
 from local authorities and emergency services.

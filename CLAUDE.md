@@ -1,10 +1,11 @@
 # CLAUDE.md — geo_stream
 
-Streamlit app for exploring **ECCC Coastal Flooding Risk Index** polygons inside
-a region the user draws on a map of Canada. Draw an ROI → choose an issue from
-ECCC's rolling 30-day Datamart forecast archive → fetch its static GeoJSON files
-→ intersect every returned polygon against the *exact* drawn shape locally →
-filter, inspect, animate, and download clipped GeoJSON or the raw JSON bundle.
+Streamlit app with an always-visible **CHS water-level** view and optional
+**ECCC Coastal Flooding Risk Index** polygons. Drawing an ROI automatically
+selects an operating CHS observation station inside the exact shape, or the
+nearest station with an explicit outside-distance label. The same ROI can then
+be used to fetch ECCC's rolling 30-day Datamart forecast archive, intersect its
+polygons locally, filter, inspect, animate, and download processed or raw data.
 
 Exploratory visualization only. It is not a warning service, and every
 user-facing string in the app is written to keep that unambiguous — especially
@@ -48,8 +49,9 @@ and is importable without Streamlit.
 | `api.py` | Hardened client for the current GeoMet view; retained and tested although the main UI now uses the archive. |
 | `archive.py` | Hardened Datamart directory/product client, amendment selection, merged collection, and raw bundle. |
 | `archive_dates.py` | Pure UTC 30-day issue-date window helper. |
+| `chs.py` | Hardened CHS/IWLS station catalogue and observation/prediction client, parsing, chart data, QC labels, and raw bundle. |
 | `animation.py` | Pure Folium timeline preparation and rendering for fetched forecast validity times. |
-| `geometry.py` | Shapely: ROI parsing/repair, bbox extraction, per-feature clipping. All GEOS contact is here. |
+| `geometry.py` | Shapely: ROI parsing/repair, exact station-point ranking, bbox extraction, per-feature clipping. All GEOS contact is here. |
 | `properties.py` | Reading ECCC's dotted property paths, normalizing risk/contributors/datetimes, the DataFrame, the GeoJSON export. |
 | `filtering.py` | Pure `FilterCriteria` matching + `summarize_features`. No I/O, no Streamlit. |
 | `map_view.py` | Folium map, `Draw` toolbar, drawing rehydration, result layer, escaped popups/tooltips, legend, synthetic banner. |
@@ -62,9 +64,28 @@ and is importable without Streamlit.
 - **`MAP_RETURNED_OBJECTS = ("all_drawings",)`.** Adding `bounds`, `zoom`, or
   `center` makes every pan trigger a Streamlit rerun, and the rerun recenters
   the map — a visible feedback loop. The viewport stays client-side.
-- **`MAP_COMPONENT_KEY` is version-suffixed (`"coastal-flood-map-v4"`).** Bump
+- **`MAP_COMPONENT_KEY` is version-suffixed (`"coastal-flood-map-v5"`).** Bump
   the suffix whenever the map's structure changes; otherwise Streamlit reuses
   the stale mounted component and the change appears not to take.
+- **CHS and ECCC state are independent.** CHS loads automatically and follows
+  the drawing; ECCC remains button-triggered and continues to use
+  `current_source_mode` for archive-vs-synthetic replacement. Never route CHS
+  through `_store_dataset` or make a map rerun contact ECCC.
+- **CHS station selection uses the exact repaired polygon.** An operating
+  observation station covered by the ROI is preferred; otherwise the nearest
+  point is selected and its distance outside the boundary is shown. Bedford
+  Institute (00491) is only the no-drawing default.
+- **CHS requests use 15-minute UTC buckets and cached outcomes.** A Streamlit
+  drawing rerun must be a cache hit, including during a temporary API failure,
+  so the app respects the published IWLS rate limits. Failed refreshes retain
+  previously successful same-station data when possible. If a newly selected
+  station has no usable bundle, the app may display the most recently
+  successful other-station bundle, but must label both the failed station and
+  fallback station explicitly and highlight the station supplying the chart.
+- **Water-level semantics stay explicit.** `wlo` is an observation and `wlp`
+  is a tide prediction. Never silently substitute one for the other, hide CHS
+  QC/preliminary state, compare absolute heights from different station datums,
+  or imply that a point gauge is an inundation map.
 - **Drawings survive reruns via `_DrawingHydrator`, not via Folium.** Re-rendered
   polygons arrive in a throwaway `FeatureGroup`; the injected script moves them
   into Leaflet.Draw's `window.drawnItems` so they stay editable, guarded by a
@@ -86,10 +107,11 @@ and is importable without Streamlit.
 - **One malformed feature must never fail the whole response.**
   `clip_feature_collection` skips bad features individually, counts them, and
   returns warnings that the UI surfaces in an expander.
-- **Every user-visible error message comes from an `ECCCError`/`GeometryError`
-  subclass and is written to be shown verbatim.** Unexpected exceptions get a
-  generic message and a `LOGGER.exception`; raw exception text never reaches
-  the UI. Failed fetches keep the previous results rather than blanking them.
+- **Every user-visible service error message comes from a safe
+  `ECCCError`/`CHSError`/`GeometryError` subclass.** Unexpected exceptions get
+  a generic message and a `LOGGER.exception`; raw exception text never reaches
+  the UI. Failed fetches keep compatible previous results rather than blanking
+  them.
 - **Synthetic data replaces archive data, never mixes with it.** It is labelled in
   `source_mode`, the feature properties, the map layer name, a fixed banner, the
   tooltip, the popup, the table's `source` column, and the download filename.
@@ -129,6 +151,9 @@ and is importable without Streamlit.
   features. That is not a bug and not an all-clear — `_render_results`
   distinguishes an empty issue, polygons that do not intersect the ROI, and
   features removed by filters.
+- **Halifax 00490 currently has predictions but no IWLS `wlo` series.** Do not
+  label its line observed. Bedford Institute 00491 is the default because it
+  supplies same-station observations and predictions in Halifax Harbour.
 
 ## Conventions
 

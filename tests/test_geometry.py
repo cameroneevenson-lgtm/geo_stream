@@ -11,10 +11,12 @@ from coastal_flood_explorer.geometry import (
     ClipResult,
     GeometryError,
     MAX_ROI_VERTICES,
+    ROIPointMatch,
     clip_feature_collection,
     extract_bbox,
     feature_collection,
     parse_roi,
+    rank_points_for_roi,
     sanitize_for_json,
     serialize_feature_collection,
 )
@@ -113,6 +115,132 @@ def test_parse_roi_rejects_out_of_range_wgs84_coordinates() -> None:
 
     with pytest.raises(GeometryError, match="outside valid WGS84"):
         parse_roi(roi)
+
+
+def test_rank_points_for_roi_classifies_inside_boundary_and_outside() -> None:
+    roi = square_feature(-64.0, 44.0, -63.0, 45.0)
+
+    matches = rank_points_for_roi(
+        roi,
+        [
+            ("outside", -62.5, 44.5),
+            ("boundary", -64.0, 44.5),
+            ("inside", -63.5, 44.5),
+        ],
+    )
+
+    assert isinstance(matches, tuple)
+    assert [match.point_id for match in matches] == [
+        "inside",
+        "boundary",
+        "outside",
+    ]
+    assert all(isinstance(match, ROIPointMatch) for match in matches)
+    assert [match.inside_roi for match in matches] == [True, True, False]
+    assert matches[0].distance_to_roi_km == 0.0
+    assert matches[1].distance_to_roi_km == 0.0
+    assert matches[2].distance_to_roi_km > 0.0
+
+
+def test_rank_points_for_roi_treats_polygon_hole_as_outside() -> None:
+    roi = Polygon(
+        shell=[
+            (-66.0, 43.0),
+            (-62.0, 43.0),
+            (-62.0, 47.0),
+            (-66.0, 47.0),
+            (-66.0, 43.0),
+        ],
+        holes=[
+            [
+                (-64.5, 44.5),
+                (-63.5, 44.5),
+                (-63.5, 45.5),
+                (-64.5, 45.5),
+                (-64.5, 44.5),
+            ]
+        ],
+    )
+
+    by_id = {
+        match.point_id: match
+        for match in rank_points_for_roi(
+            roi,
+            [
+                ("shell", -65.0, 45.0),
+                ("hole", -64.0, 45.0),
+                ("hole-boundary", -64.5, 45.0),
+            ],
+        )
+    }
+
+    assert by_id["shell"].inside_roi is True
+    assert by_id["hole"].inside_roi is False
+    assert by_id["hole"].distance_to_roi_km > 0.0
+    assert by_id["hole-boundary"].inside_roi is True
+    assert by_id["hole-boundary"].distance_to_roi_km == 0.0
+
+
+def test_rank_points_for_roi_rejects_malformed_roi() -> None:
+    with pytest.raises(GeometryError, match="Polygon or MultiPolygon"):
+        rank_points_for_roi(
+            {"type": "Point", "coordinates": [-63.0, 45.0]},
+            [("valid", -63.0, 45.0)],
+        )
+
+
+def test_rank_points_for_roi_skips_invalid_point_records_and_coordinates() -> None:
+    candidates = [
+        ("valid", -63.5, 44.5),
+        ("nan", math.nan, 44.5),
+        ("infinite", -63.5, math.inf),
+        ("bad-longitude", 180.1, 44.5),
+        ("bad-latitude", -63.5, -90.1),
+        ("text", "not-a-longitude", 44.5),
+        ("bool", True, 44.5),
+        (17, -63.5, 44.5),
+        ("too-short", -63.5),
+    ]
+
+    matches = rank_points_for_roi(
+        square_feature(-64.0, 44.0, -63.0, 45.0),
+        candidates,  # type: ignore[arg-type]
+    )
+
+    assert [match.point_id for match in matches] == ["valid"]
+
+
+def test_rank_points_for_roi_has_deterministic_id_tie_breaks() -> None:
+    roi = square_feature(-64.0, 44.0, -62.0, 46.0)
+
+    matches = rank_points_for_roi(
+        roi,
+        [
+            ("outside-z", -65.0, 45.0),
+            ("inside-z", -63.5, 45.0),
+            ("outside-a", -61.0, 45.0),
+            ("inside-a", -62.5, 45.0),
+        ],
+    )
+
+    assert [match.point_id for match in matches] == [
+        "inside-a",
+        "inside-z",
+        "outside-a",
+        "outside-z",
+    ]
+
+
+def test_rank_points_for_roi_reports_realistic_haversine_distances() -> None:
+    matches = rank_points_for_roi(
+        square_feature(-64.0, 44.0, -63.0, 45.0),
+        [("one-degree-north", -63.5, 46.0)],
+    )
+
+    assert len(matches) == 1
+    assert matches[0].inside_roi is False
+    assert matches[0].distance_to_roi_km == pytest.approx(111.195, abs=0.01)
+    assert matches[0].distance_to_center_km == pytest.approx(166.793, abs=0.01)
 
 
 def test_clip_polygon_preserves_id_and_properties_without_mutation() -> None:

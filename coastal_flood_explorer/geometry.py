@@ -14,9 +14,16 @@ from pathlib import Path
 from typing import Any, TypeAlias
 
 from shapely.errors import GEOSException
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, mapping, shape
+from shapely.geometry import (
+    GeometryCollection,
+    MultiPolygon,
+    Point,
+    Polygon,
+    mapping,
+    shape,
+)
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
+from shapely.ops import nearest_points, unary_union
 
 try:
     from shapely.validation import make_valid
@@ -26,6 +33,7 @@ except ImportError:  # pragma: no cover - Shapely 2.x is a project requirement.
 
 LOGGER = logging.getLogger(__name__)
 MAX_ROI_VERTICES = 10_000
+MEAN_EARTH_RADIUS_KM = 6_371.0088
 
 BBox: TypeAlias = tuple[float, float, float, float]
 FeatureCollection: TypeAlias = dict[str, Any]
@@ -43,6 +51,16 @@ class ClipResult:
     feature_collection: FeatureCollection
     skipped_count: int
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ROIPointMatch:
+    """A valid point ranked against an exact polygonal ROI."""
+
+    point_id: str
+    inside_roi: bool
+    distance_to_roi_km: float
+    distance_to_center_km: float
 
 
 def _repair_geometry(geometry: BaseGeometry) -> BaseGeometry:
@@ -200,6 +218,125 @@ def extract_bbox(roi: GeoJSONMapping | BaseGeometry) -> BBox:
     """Backward-compatible descriptive alias for :func:`roi_bbox`."""
 
     return roi_bbox(roi)
+
+
+def _haversine_km(
+    first_lon: float,
+    first_lat: float,
+    second_lon: float,
+    second_lat: float,
+) -> float:
+    """Return great-circle distance in kilometres between two WGS84 points."""
+
+    first_lat_radians = math.radians(first_lat)
+    second_lat_radians = math.radians(second_lat)
+    latitude_delta = second_lat_radians - first_lat_radians
+    longitude_delta = math.radians(second_lon - first_lon)
+    haversine = (
+        math.sin(latitude_delta / 2.0) ** 2
+        + math.cos(first_lat_radians)
+        * math.cos(second_lat_radians)
+        * math.sin(longitude_delta / 2.0) ** 2
+    )
+    angular_distance = 2.0 * math.asin(min(1.0, math.sqrt(haversine)))
+    return MEAN_EARTH_RADIUS_KM * angular_distance
+
+
+def _valid_wgs84_point(
+    candidate: object,
+) -> tuple[str, float, float, Point] | None:
+    """Return a normalized point tuple, or ``None`` for an invalid candidate."""
+
+    try:
+        point_id, raw_lon, raw_lat = candidate  # type: ignore[misc]
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(point_id, str):
+        return None
+    if isinstance(raw_lon, bool) or isinstance(raw_lat, bool):
+        return None
+    try:
+        lon = float(raw_lon)
+        lat = float(raw_lat)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (
+        not math.isfinite(lon)
+        or not math.isfinite(lat)
+        or lon < -180.0
+        or lon > 180.0
+        or lat < -90.0
+        or lat > 90.0
+    ):
+        return None
+    return point_id, lon, lat, Point(lon, lat)
+
+
+def rank_points_for_roi(
+    roi: GeoJSONMapping | BaseGeometry,
+    points: Iterable[tuple[str, float, float]],
+) -> tuple[ROIPointMatch, ...]:
+    """Rank valid WGS84 points against an exact polygonal ROI.
+
+    Invalid point records and coordinates are skipped. Points covered by the
+    ROI, including its boundaries, sort first by distance to a representative
+    interior point. Outside points follow by their shortest distance to the
+    exact ROI. Point IDs provide a deterministic tie-break in both groups.
+    """
+
+    roi_geometry = parse_roi(roi)
+    roi_center = roi_geometry.representative_point()
+    center_lon, center_lat = roi_center.x, roi_center.y
+    matches: list[ROIPointMatch] = []
+
+    for candidate in points:
+        normalized = _valid_wgs84_point(candidate)
+        if normalized is None:
+            continue
+        point_id, lon, lat, point = normalized
+        try:
+            inside_roi = bool(roi_geometry.covers(point))
+            if inside_roi:
+                distance_to_roi_km = 0.0
+            else:
+                nearest_roi_point = nearest_points(roi_geometry, point)[0]
+                distance_to_roi_km = _haversine_km(
+                    lon,
+                    lat,
+                    nearest_roi_point.x,
+                    nearest_roi_point.y,
+                )
+        except (GEOSException, ValueError, TypeError) as exc:
+            raise GeometryError(
+                f"Point {point_id!r} could not be ranked against the ROI: {exc}"
+            ) from exc
+
+        matches.append(
+            ROIPointMatch(
+                point_id=point_id,
+                inside_roi=inside_roi,
+                distance_to_roi_km=distance_to_roi_km,
+                distance_to_center_km=_haversine_km(
+                    lon,
+                    lat,
+                    center_lon,
+                    center_lat,
+                ),
+            )
+        )
+
+    matches.sort(
+        key=lambda match: (
+            0 if match.inside_roi else 1,
+            (
+                match.distance_to_center_km
+                if match.inside_roi
+                else match.distance_to_roi_km
+            ),
+            match.point_id,
+        )
+    )
+    return tuple(matches)
 
 
 def feature_collection(features: Iterable[Mapping[str, Any]]) -> FeatureCollection:

@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta, timezone
 
 import folium
 
+from coastal_flood_explorer.chs import (
+    CHSStation,
+    CHSWaterLevelBundle,
+    WaterLevelPoint,
+    WaterLevelSeries,
+)
 from coastal_flood_explorer.map_view import (
     CANADA_BOUNDS,
     CANADA_NAVIGATION_BOUNDS,
@@ -11,6 +18,7 @@ from coastal_flood_explorer.map_view import (
     DEFAULT_ZOOM,
     MIN_ZOOM,
     build_base_map,
+    build_chs_station_layer,
     build_drawing_hydration_layer,
     build_layer_control,
     build_result_layer,
@@ -184,3 +192,107 @@ def test_popup_escapes_property_values() -> None:
     rendered = map_object.get_root().render()
     assert "<script>alert(1)</script>" not in rendered
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+
+
+def test_chs_station_layer_is_toggleable_and_highlights_selection() -> None:
+    station = CHSStation(
+        id="station-one",
+        code="00491",
+        official_name="Bedford Institute",
+        latitude=44.682262,
+        longitude=-63.613239,
+        operating=True,
+        time_series_codes=("wlo", "wlp"),
+    )
+    layer = build_chs_station_layer(
+        [station],
+        selected_station_id=station.id,
+    )
+    map_object = folium.Map()
+    layer.add_to(map_object)
+    rendered = map_object.get_root().render()
+
+    assert layer.layer_name == "CHS observation stations"
+    assert layer.control is True
+    assert layer.show is True
+    assert '"radius": 8' in rendered
+    assert "Bedford Institute" in rendered
+    assert "Observations and tide predictions" in rendered
+
+
+def test_chs_station_popup_escapes_values_and_shows_latest_data() -> None:
+    station = CHSStation(
+        id="station-unsafe",
+        code="00<91",
+        official_name="<script>alert(1)</script>",
+        latitude=44.68,
+        longitude=-63.61,
+        operating=True,
+        time_series_codes=("wlo", "wlp"),
+    )
+    anchor = datetime(2026, 7, 23, 20, 0, tzinfo=timezone.utc)
+    observed = WaterLevelSeries(
+        code="wlo",
+        label="Observed water level",
+        points=(
+            WaterLevelPoint(
+                timestamp=anchor - timedelta(minutes=15),
+                value_m=1.234,
+                qc_code="1",
+                reviewed=False,
+            ),
+        ),
+        start_time=anchor - timedelta(hours=24),
+        end_time=anchor,
+    )
+    predicted = WaterLevelSeries(
+        code="wlp",
+        label="Predicted water level",
+        points=(
+            WaterLevelPoint(
+                timestamp=anchor,
+                value_m=1.111,
+                qc_code="2",
+                reviewed=False,
+            ),
+        ),
+        start_time=anchor - timedelta(hours=24),
+        end_time=anchor + timedelta(hours=24),
+    )
+    bundle = CHSWaterLevelBundle(
+        station=station,
+        anchor_time=anchor,
+        fetched_at=anchor,
+        observed=observed,
+        predicted=predicted,
+    )
+    map_object = folium.Map()
+    build_chs_station_layer(
+        [station],
+        selected_station_id=station.id,
+        bundle=bundle,
+    ).add_to(map_object)
+    rendered = map_object.get_root().render()
+
+    assert "<script>alert(1)</script>" not in rendered
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in rendered
+    assert "1.234 m" in rendered
+    assert "Good" in rendered
+    assert "1.111 m" in rendered
+
+
+def test_chs_station_layer_skips_invalid_coordinates() -> None:
+    station = CHSStation(
+        id="invalid-location",
+        code="99999",
+        official_name="Invalid location",
+        latitude=math.nan,
+        longitude=-63.0,
+        operating=True,
+        time_series_codes=("wlo",),
+    )
+    map_object = folium.Map()
+    build_chs_station_layer([station]).add_to(map_object)
+    rendered = map_object.get_root().render()
+
+    assert "Invalid location" not in rendered

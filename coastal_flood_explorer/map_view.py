@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import math
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -13,6 +14,12 @@ from branca.element import MacroElement
 from folium.plugins import Draw, Fullscreen
 from folium.template import Template
 
+from coastal_flood_explorer.chs import (
+    CHSStation,
+    CHSWaterLevelBundle,
+    latest_point,
+    nearest_point,
+)
 from coastal_flood_explorer.properties import (
     RISK_COLOURS,
     STORM_SURGE_PROPERTY,
@@ -440,4 +447,122 @@ def build_result_layer(
             max_width=430,
         ).add_to(layer)
         layer.add_to(group)
+    return group
+
+
+def _station_popup_html(
+    station: CHSStation,
+    *,
+    selected: bool,
+    bundle: CHSWaterLevelBundle | None,
+) -> str:
+    """Return escaped popup markup for one official CHS station."""
+
+    rows = [
+        ("Station", station.official_name),
+        ("CHS code", station.code),
+        (
+            "Available series",
+            (
+                "Observations and tide predictions"
+                if station.offers("wlp")
+                else "Observations"
+            ),
+        ),
+    ]
+    if selected and bundle is not None and bundle.station.id == station.id:
+        observation = latest_point(bundle.observed)
+        prediction = nearest_point(bundle.predicted, bundle.anchor_time)
+        if observation is not None:
+            rows.extend(
+                (
+                    ("Latest observation", f"{observation.value_m:.3f} m"),
+                    (
+                        "Observation time",
+                        observation.timestamp.isoformat().replace("+00:00", "Z"),
+                    ),
+                    ("Observation QC", observation.qc_label),
+                )
+            )
+        if prediction is not None:
+            rows.extend(
+                (
+                    ("Prediction near now", f"{prediction.value_m:.3f} m"),
+                    (
+                        "Prediction time",
+                        prediction.timestamp.isoformat().replace("+00:00", "Z"),
+                    ),
+                )
+            )
+
+    body = "".join(
+        (
+            "<tr>"
+            f"<th style='text-align:left;padding:2px 8px 2px 0'>{_escaped(label)}</th>"
+            f"<td style='padding:2px 0'>{_escaped(value)}</td>"
+            "</tr>"
+        )
+        for label, value in rows
+    )
+    return "<table>" + body + "</table>"
+
+
+def build_chs_station_layer(
+    stations: Iterable[CHSStation],
+    *,
+    selected_station_id: str | None = None,
+    bundle: CHSWaterLevelBundle | None = None,
+) -> folium.FeatureGroup:
+    """Build a noneditable layer of operating CHS observation stations."""
+
+    group = folium.FeatureGroup(
+        name="CHS observation stations",
+        control=True,
+        show=True,
+    )
+    valid_stations = [
+        station
+        for station in stations
+        if (
+            isinstance(station, CHSStation)
+            and math.isfinite(station.latitude)
+            and math.isfinite(station.longitude)
+            and -90.0 <= station.latitude <= 90.0
+            and -180.0 <= station.longitude <= 180.0
+        )
+    ]
+    # Add the selected marker last so it remains clickable above nearby dots.
+    valid_stations.sort(
+        key=lambda station: (
+            station.id == selected_station_id,
+            station.official_name.casefold(),
+            station.code,
+        )
+    )
+    for station in valid_stations:
+        selected = station.id == selected_station_id
+        marker = folium.CircleMarker(
+            location=(station.latitude, station.longitude),
+            radius=8 if selected else 4,
+            color="#0c4a6e" if selected else "#0369a1",
+            weight=3 if selected else 1,
+            opacity=1.0 if selected else 0.72,
+            fill=True,
+            fill_color="#0ea5e9" if selected else "#38bdf8",
+            fill_opacity=0.95 if selected else 0.58,
+        )
+        folium.Tooltip(
+            "CHS gauge: "
+            f"{_escaped(station.official_name)} ({_escaped(station.code)})",
+            sticky=True,
+        ).add_to(marker)
+        folium.Popup(
+            _station_popup_html(
+                station,
+                selected=selected,
+                bundle=bundle,
+            ),
+            max_width=410,
+        ).add_to(marker)
+        marker.add_to(group)
     return group

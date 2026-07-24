@@ -10,6 +10,8 @@ import pytest
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
+    GDSPS_MODEL,
+    RESPS_MODEL,
     SSH,
     GDSPSConfigurationError,
     GDSPSDiscoveryError,
@@ -112,6 +114,55 @@ def test_discovers_gdsps_layers_and_times() -> None:
     assert url == "https://geo.weather.gc.ca/geomet"
     assert kwargs["params"]["request"] == "GetCapabilities"
     assert kwargs["allow_redirects"] is False
+
+
+def test_discovery_separates_gdsps_and_resps_and_drops_non_data() -> None:
+    # Reproduces the live GeoMet shape: two GDSPS data layers, RESPS ensemble
+    # members, and three non-data entries (a model group and a footprint with
+    # no time dimension, plus a bare legend style that names no model). Verified
+    # against the real service, the pre-fix matcher swept in all of these.
+    times = "2026-07-22T00:00:00Z,2026-07-22T01:00:00Z"
+    document = capabilities(
+        layer_xml("GDSPS_15km_StormSurge", "GDSPS.ETAS - Storm surge [m]", times),
+        layer_xml(
+            "GDSPS_15km_SeaSfcHeight",
+            "GDSPS.SSH - Sea surface height above Mean Water Level [m]",
+            times,
+        ),
+        layer_xml(
+            "RESPS-Atlantic-North-West_9km_StormSurge_01",
+            "RESPS-Atlantic-North-West_9km_StormSurge_01 - Storm surge [m] "
+            "[control member]",
+            times,
+        ),
+        layer_xml(
+            "RESPS-Atlantic-North-West_9km_StormSurge_02",
+            "RESPS-Atlantic-North-West_9km_StormSurge_02 - Storm surge [m]",
+            times,
+        ),
+        layer_xml("GDSPS", "GDSPS"),  # group container, no time dimension
+        layer_xml("GDPSP_Footprint", "GDSPS footprint"),  # footprint, no time
+        layer_xml("Storm_Surge-Dis", "Storm surge legend", times),  # no model
+    )
+    layers = GDSPSWMSClient(
+        session=FakeSession(FakeResponse(text=document))
+    ).discover_layers()
+    by_name = {layer.name: layer for layer in layers}
+
+    # Only model-named, time-bearing data layers survive; the group, footprint,
+    # and model-less legend style are all dropped.
+    assert set(by_name) == {
+        "GDSPS_15km_StormSurge",
+        "GDSPS_15km_SeaSfcHeight",
+        "RESPS-Atlantic-North-West_9km_StormSurge_01",
+        "RESPS-Atlantic-North-West_9km_StormSurge_02",
+    }
+    gdsps = by_name["GDSPS_15km_StormSurge"]
+    assert (gdsps.model, gdsps.variable, gdsps.member) == (GDSPS_MODEL, ETAS, None)
+    assert by_name["GDSPS_15km_SeaSfcHeight"].variable == SSH
+    resps_control = by_name["RESPS-Atlantic-North-West_9km_StormSurge_01"]
+    assert (resps_control.model, resps_control.member) == (RESPS_MODEL, 1)
+    assert by_name["RESPS-Atlantic-North-West_9km_StormSurge_02"].member == 2
 
 
 def test_no_matching_layers_is_empty_not_error() -> None:

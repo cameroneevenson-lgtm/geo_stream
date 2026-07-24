@@ -9,7 +9,9 @@ import pytest
 from coastal_flood_explorer.api import ECCCError
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
+    GDSPS_MODEL,
     GDSPS_VARIABLES,
+    RESPS_MODEL,
     SSH,
     GDSPSConfigurationError,
     GDSPSDatamartFile,
@@ -17,10 +19,12 @@ from coastal_flood_explorer.gdsps_common import (
     GDSPSLayerInfo,
     GDSPSResponseError,
     GDSPSRun,
+    classify_model,
     classify_variable,
     is_gdsps_identifier,
     normalize_variable,
     parse_iso_utc,
+    resps_member,
     utc_text,
     validate_bbox,
     variable_definition,
@@ -65,6 +69,43 @@ def test_is_gdsps_identifier(value: str | None, expected: bool) -> None:
 )
 def test_classify_variable(candidates: tuple[str, ...], expected: str | None) -> None:
     assert classify_variable(*candidates) == expected
+
+
+@pytest.mark.parametrize(
+    ("candidates", "expected"),
+    [
+        # GDSPS is identified by its acronym, never by the bare phenomenon.
+        (("GDSPS_15km_StormSurge",), GDSPS_MODEL),
+        (("GDSPS_15km_SeaSfcHeight", "GDSPS.SSH - ..."), GDSPS_MODEL),
+        # RESPS is a different model and must classify as RESPS, not GDSPS.
+        (("RESPS-Atlantic-North-West_9km_StormSurge_01",), RESPS_MODEL),
+        (("some_name", "Regional Ensemble ... (RESPS)"), RESPS_MODEL),
+        # Bare "storm surge" legend styles / group containers name no model.
+        (("Storm_Surge-Dis",), None),
+        (("StormSurge_-3-3",), None),
+        (("Storm surge legend",), None),
+        ((None, 123), None),
+    ],
+)
+def test_classify_model_separates_models_and_rejects_non_model(
+    candidates: tuple[object, ...],
+    expected: str | None,
+) -> None:
+    assert classify_model(*candidates) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("RESPS-Atlantic-North-West_9km_StormSurge_01", 1),
+        ("RESPS-Atlantic-North-West_9km_SeaSfcHeight_21", 21),
+        ("GDSPS_15km_StormSurge", None),
+        ("no_trailing_number", None),
+        (None, None),
+    ],
+)
+def test_resps_member_parsing(value: str | None, expected: int | None) -> None:
+    assert resps_member(value) == expected
 
 
 def test_normalize_variable_is_case_insensitive() -> None:

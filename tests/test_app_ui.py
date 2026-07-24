@@ -895,7 +895,7 @@ def test_gdsps_section_shows_unavailable_when_nothing_discovered() -> None:
 
     assert not list(app.exception)
     assert any(
-        "GDSPS storm-surge content is not currently advertised" in element.value
+        "Storm-surge content is not currently advertised" in element.value
         for element in app.info
     )
     # No overlay params are set when nothing is discovered.

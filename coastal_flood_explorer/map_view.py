@@ -467,8 +467,13 @@ def build_gdsps_overlay_layer(
     the layer control stays stable.
     """
 
+    overlay_label = GDSPS_LAYER_NAME
+    if isinstance(params, Mapping):
+        candidate = params.get("label")
+        if isinstance(candidate, str) and candidate.strip():
+            overlay_label = candidate.strip()
     group = folium.FeatureGroup(
-        name=GDSPS_LAYER_NAME,
+        name=overlay_label,
         control=True,
         show=bool(enabled),
     )
@@ -496,7 +501,7 @@ def build_gdsps_overlay_layer(
         transparent=bool(params.get("transparent", True)),
         version=str(params.get("version", "1.3.0")),
         attr=str(params.get("attribution") or WMS_ATTRIBUTION_FALLBACK),
-        name=GDSPS_LAYER_NAME,
+        name=overlay_label,
         overlay=True,
         control=False,
         show=True,

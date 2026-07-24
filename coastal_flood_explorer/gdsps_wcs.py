@@ -24,6 +24,7 @@ from .api import (
 )
 from .gdsps_common import (
     GEOMET_ENDPOINT,
+    RESPS_MODEL,
     GDSPSConfigurationError,
     GDSPSCoverageInfo,
     GDSPSDataUnavailableError,
@@ -31,9 +32,10 @@ from .gdsps_common import (
     GDSPSError,
     GDSPSRequestError,
     GDSPSResponseError,
+    classify_model,
     classify_variable,
-    is_gdsps_identifier,
     normalize_variable,
+    resps_member,
     validate_bbox,
 )
 
@@ -193,15 +195,19 @@ def _collect_coverages(root: ET.Element) -> tuple[GDSPSCoverageInfo, ...]:
         if not coverage_id:
             continue
         title = _first_text(summary, "Title") or coverage_id
-        if not (
-            is_gdsps_identifier(coverage_id) or is_gdsps_identifier(title)
-        ):
+        model = classify_model(coverage_id, title)
+        if model is None:
+            # Names no model — a container or unrelated coverage, not usable
+            # storm-surge data. Keeps GDSPS and RESPS strictly separate.
             continue
         if coverage_id not in discovered:
+            member = resps_member(coverage_id) if model == RESPS_MODEL else None
             discovered[coverage_id] = GDSPSCoverageInfo(
                 coverage_id=coverage_id,
                 title=title,
                 variable=classify_variable(coverage_id, title),
+                model=model,
+                member=member,
             )
     return tuple(sorted(discovered.values(), key=lambda item: item.coverage_id))
 

@@ -27,6 +27,30 @@ GEOMET_ENDPOINT = "https://geo.weather.gc.ca/geomet"
 GDSPS_DATAMART_ROOT = "https://dd.weather.gc.ca"
 GDSPS_DATAMART_PATH = "/model_gdsps/"
 
+# Two distinct ECCC/MSC storm-surge *models* share the same GeoMet endpoint and
+# both use "storm surge" phrasing, so they must be told apart by their model
+# token, never by the generic phenomenon.  GDSPS is the Global Deterministic
+# system (one deterministic run, ETAS + SSH variables).  RESPS is the Regional
+# Ensemble system (Atlantic North-West, one storm-surge variable across many
+# ensemble members).  A layer/coverage that names neither model is not usable
+# storm-surge data (it is a group container, footprint, or legend style).
+GDSPS_MODEL = "GDSPS"
+RESPS_MODEL = "RESPS"
+SURGE_MODELS: tuple[str, ...] = (GDSPS_MODEL, RESPS_MODEL)
+
+MODEL_DEFINITIONS: dict[str, str] = {
+    GDSPS_MODEL: (
+        "Global Deterministic Storm Surge Prediction System — one deterministic "
+        "forecast run, providing storm-surge elevation (ETAS) and total water "
+        "level (SSH)."
+    ),
+    RESPS_MODEL: (
+        "Regional Ensemble Storm Surge Prediction System (Atlantic North-West) "
+        "— a storm-surge ensemble with a control member and perturbed members. "
+        "It is a different model from GDSPS and its members are never averaged."
+    ),
+}
+
 # The two GDSPS variables must never be conflated.  ETAS is storm-surge
 # elevation (derived from SSH by harmonic analysis); SSH is total water level
 # and is not an engineering/chart datum.
@@ -49,12 +73,27 @@ VARIABLE_DEFINITIONS: dict[str, str] = {
 # A layer name, coverage id, or filename is treated as GDSPS storm-surge
 # content when it mentions the model or either variable.  Kept intentionally
 # broad because the exact GeoMet layer naming is discovered, not assumed.
+#
+# WARNING: this token also matches the *unrelated* RESPS ensemble model and bare
+# "storm surge" legend styles, so it must NOT be used on its own as a discovery
+# gate.  Use :func:`classify_model` to keep the two models apart and to reject
+# non-model content; verified live against GeoMet, `is_gdsps_identifier` alone
+# swept in all 21 RESPS members plus group/footprint/style entries.
 _GDSPS_TOKEN = re.compile(
     r"(?:gdsps|storm[\s_-]*surge|\bETAS\b|\bSSH\b)",
     re.IGNORECASE,
 )
 _ETAS_TOKEN = re.compile(r"(?:\bETAS\b|storm[\s_-]*surge)", re.IGNORECASE)
 _SSH_TOKEN = re.compile(r"(?:\bSSH\b|sea[\s_-]*surface|total[\s_-]*water)", re.IGNORECASE)
+
+# Model tokens are anchored to the model acronym only, never the phenomenon, so
+# GDSPS and RESPS can never be conflated.  GDSPS is tested before RESPS only for
+# determinism; a real identifier names exactly one model.
+_GDSPS_MODEL_TOKEN = re.compile(r"gdsps", re.IGNORECASE)
+_RESPS_MODEL_TOKEN = re.compile(r"resps", re.IGNORECASE)
+# A RESPS ensemble member suffix, e.g. "..._StormSurge_01"; member 01 is the
+# control member by MSC convention.
+_RESPS_MEMBER = re.compile(r"_(?P<member>\d{2,3})$")
 
 
 class GDSPSError(ECCCError):
@@ -116,12 +155,19 @@ class GDSPSRun:
 
 @dataclass(frozen=True, slots=True)
 class GDSPSLayerInfo:
-    """A discovered GeoMet WMS layer for GDSPS storm-surge content."""
+    """A discovered GeoMet WMS layer for storm-surge content.
+
+    ``model`` names the owning ECCC model (GDSPS or RESPS); the two are kept
+    strictly separate.  ``member`` is the RESPS ensemble member number (``None``
+    for GDSPS and for RESPS group layers).
+    """
 
     name: str
     title: str
     variable: str | None
     available_times: tuple[datetime, ...] = ()
+    model: str = GDSPS_MODEL
+    member: int | None = None
 
     def metadata(self) -> dict[str, Any]:
         """Return JSON-serializable layer metadata."""
@@ -129,6 +175,8 @@ class GDSPSLayerInfo:
         return {
             "name": self.name,
             "title": self.title,
+            "model": self.model,
+            "member": self.member,
             "variable": self.variable,
             "available_times": [utc_text(value) for value in self.available_times],
         }
@@ -136,11 +184,17 @@ class GDSPSLayerInfo:
 
 @dataclass(frozen=True, slots=True)
 class GDSPSCoverageInfo:
-    """A discovered GeoMet WCS coverage for GDSPS storm-surge content."""
+    """A discovered GeoMet WCS coverage for storm-surge content.
+
+    ``model`` names the owning ECCC model (GDSPS or RESPS); ``member`` is the
+    RESPS ensemble member number, or ``None`` for GDSPS.
+    """
 
     coverage_id: str
     title: str
     variable: str | None
+    model: str = GDSPS_MODEL
+    member: int | None = None
 
     def metadata(self) -> dict[str, Any]:
         """Return JSON-serializable coverage metadata."""
@@ -148,6 +202,8 @@ class GDSPSCoverageInfo:
         return {
             "coverage_id": self.coverage_id,
             "title": self.title,
+            "model": self.model,
+            "member": self.member,
             "variable": self.variable,
         }
 
@@ -184,9 +240,46 @@ class GDSPSDatamartFile:
 
 
 def is_gdsps_identifier(value: str | None) -> bool:
-    """Return whether a layer name/coverage id/filename looks like GDSPS."""
+    """Return whether a value mentions storm-surge content (broad).
+
+    This stays intentionally permissive and is retained for the Datamart and
+    THREDDS filename checks.  For layer/coverage discovery use
+    :func:`classify_model`, which distinguishes GDSPS from RESPS and rejects
+    non-model content.
+    """
 
     return isinstance(value, str) and _GDSPS_TOKEN.search(value) is not None
+
+
+def classify_model(*candidates: str | None) -> str | None:
+    """Return ``"GDSPS"``/``"RESPS"`` for a layer name/coverage id, else ``None``.
+
+    The decision is made on the model acronym alone, so the two storm-surge
+    models are never conflated and a generic "storm surge" group container,
+    footprint, or legend style (which names no model) returns ``None`` and is
+    skipped by discovery.
+    """
+
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        if _GDSPS_MODEL_TOKEN.search(candidate):
+            return GDSPS_MODEL
+        if _RESPS_MODEL_TOKEN.search(candidate):
+            return RESPS_MODEL
+    return None
+
+
+def resps_member(*candidates: str | None) -> int | None:
+    """Return the RESPS ensemble member number from an identifier, if present."""
+
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        match = _RESPS_MEMBER.search(candidate.strip())
+        if match is not None:
+            return int(match.group("member"))
+    return None
 
 
 def classify_variable(*candidates: str | None) -> str | None:

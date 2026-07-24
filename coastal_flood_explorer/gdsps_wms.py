@@ -25,13 +25,15 @@ from .api import (
 )
 from .gdsps_common import (
     GEOMET_ENDPOINT,
+    RESPS_MODEL,
     GDSPSConfigurationError,
     GDSPSDiscoveryError,
     GDSPSLayerInfo,
     GDSPSRequestError,
+    classify_model,
     classify_variable,
-    is_gdsps_identifier,
     parse_iso_utc,
+    resps_member,
 )
 
 logger = logging.getLogger(__name__)
@@ -167,8 +169,27 @@ def build_wms_tile_params(
         "opacity": opacity_value,
         "time": time_text,
         "attribution": WMS_ATTRIBUTION,
+        "model": layer.model,
+        "member": layer.member,
         "variable": layer.variable,
+        "label": _overlay_label(layer),
     }
+
+
+def _overlay_label(layer: GDSPSLayerInfo) -> str:
+    """Return a map-control label that names the model, variable, and member.
+
+    RESPS members must never appear under a bare "GDSPS" label; this keeps the
+    two models visibly distinct on the map's layer control.
+    """
+
+    parts: list[str] = [layer.model]
+    if layer.variable:
+        parts.append(layer.variable)
+    if layer.member is not None:
+        control = " (control)" if layer.member == 1 else ""
+        parts.append(f"member {layer.member:02d}{control}")
+    return " · ".join(parts)
 
 
 def _collect_layers(root: ET.Element) -> tuple[GDSPSLayerInfo, ...]:
@@ -199,15 +220,21 @@ def _walk_layers(
         effective_times = own_times or inherited_times
         name = _child_text(child, "Name")
         title = _child_text(child, "Title") or (name or "")
-        if name and (
-            is_gdsps_identifier(name) or is_gdsps_identifier(title)
-        ):
+        model = classify_model(name, title)
+        # A usable overlay must name a model AND advertise a time dimension.
+        # This is what keeps GDSPS and RESPS apart and drops the model group
+        # containers, the footprint outline, and bare legend styles — all of
+        # which either name no model or expose no time dimension.
+        if name and model is not None and effective_times:
             if name not in discovered:
+                member = resps_member(name) if model == RESPS_MODEL else None
                 discovered[name] = GDSPSLayerInfo(
                     name=name,
                     title=title,
                     variable=classify_variable(name, title),
                     available_times=effective_times,
+                    model=model,
+                    member=member,
                 )
         _walk_layers(
             child,

@@ -12,6 +12,8 @@ import xarray as xr
 from coastal_flood_explorer import gdsps_service
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
+    GDSPS_MODEL,
+    RESPS_MODEL,
     SSH,
     GDSPSCoverageInfo,
     GDSPSDatamartFile,
@@ -50,6 +52,37 @@ def test_layer_for_variable() -> None:
     )
     assert gdsps_service.layer_for_variable(layers, SSH).name == "GDSPS.SSH"
     assert gdsps_service.layer_for_variable(layers, "ZZZ") is None
+
+
+def test_model_scoped_selection_keeps_gdsps_and_resps_separate() -> None:
+    layers = (
+        GDSPSLayerInfo("GDSPS_15km_StormSurge", "t", ETAS, model=GDSPS_MODEL),
+        GDSPSLayerInfo("GDSPS_15km_SeaSfcHeight", "t", SSH, model=GDSPS_MODEL),
+        GDSPSLayerInfo("RESPS_9km_StormSurge_01", "t", ETAS, model=RESPS_MODEL, member=1),
+        GDSPSLayerInfo("RESPS_9km_StormSurge_02", "t", ETAS, model=RESPS_MODEL, member=2),
+    )
+    files = (_file(SSH, RUN_00, 3),)  # Datamart NetCDF is GDSPS-only.
+
+    assert gdsps_service.models_available(layers, files) == (GDSPS_MODEL, RESPS_MODEL)
+    # Datamart availability alone implies GDSPS; nothing discovered stays empty.
+    assert gdsps_service.models_available((), files) == (GDSPS_MODEL,)
+    assert gdsps_service.models_available((), ()) == ()
+
+    # Variables are scoped per model (GDSPS also picks up the Datamart SSH file).
+    assert gdsps_service.variables_for_model(layers, files, GDSPS_MODEL) == (ETAS, SSH)
+    assert gdsps_service.variables_for_model(layers, files, RESPS_MODEL) == (ETAS,)
+
+    # Members are RESPS-only and sorted; GDSPS has none.
+    assert gdsps_service.members_for_model(layers, RESPS_MODEL, ETAS) == (1, 2)
+    assert gdsps_service.members_for_model(layers, GDSPS_MODEL, ETAS) == ()
+
+    # layer_for keeps model and ensemble member distinct.
+    assert gdsps_service.layer_for(layers, GDSPS_MODEL, ETAS).member is None
+    assert (
+        gdsps_service.layer_for(layers, RESPS_MODEL, ETAS, 2).name
+        == "RESPS_9km_StormSurge_02"
+    )
+    assert gdsps_service.layer_for(layers, RESPS_MODEL, SSH, 1) is None
 
 
 def test_runs_from_files_newest_first() -> None:

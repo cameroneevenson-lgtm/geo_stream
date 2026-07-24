@@ -14,7 +14,9 @@ from datetime import datetime
 from typing import Any
 
 from .gdsps_common import (
+    GDSPS_MODEL,
     GDSPS_VARIABLES,
+    SURGE_MODELS,
     GDSPSDataUnavailableError,
     GDSPSCoverageInfo,
     GDSPSDatamartFile,
@@ -38,7 +40,7 @@ def variable_options(
     layers: tuple[GDSPSLayerInfo, ...],
     files: tuple[GDSPSDatamartFile, ...],
 ) -> tuple[str, ...]:
-    """Return only the GDSPS variables actually discovered upstream."""
+    """Return only the storm-surge variables actually discovered upstream."""
 
     discovered = {layer.variable for layer in layers if layer.variable}
     discovered.update(file.variable for file in files)
@@ -47,11 +49,86 @@ def variable_options(
     )
 
 
+def models_available(
+    layers: tuple[GDSPSLayerInfo, ...],
+    files: tuple[GDSPSDatamartFile, ...],
+) -> tuple[str, ...]:
+    """Return the storm-surge models actually discovered, in canonical order.
+
+    GDSPS and RESPS are surfaced as separate models so the UI never mixes a
+    deterministic run with an ensemble member.  Datamart NetCDF files are
+    GDSPS-only, so their presence implies GDSPS availability.
+    """
+
+    present = {layer.model for layer in layers}
+    if files:
+        present.add(GDSPS_MODEL)
+    return tuple(model for model in SURGE_MODELS if model in present)
+
+
+def variables_for_model(
+    layers: tuple[GDSPSLayerInfo, ...],
+    files: tuple[GDSPSDatamartFile, ...],
+    model: str,
+) -> tuple[str, ...]:
+    """Return the variables discovered for one model, in canonical order."""
+
+    discovered = {
+        layer.variable
+        for layer in layers
+        if layer.model == model and layer.variable
+    }
+    if model == GDSPS_MODEL:
+        discovered.update(file.variable for file in files)
+    return tuple(
+        variable for variable in GDSPS_VARIABLES if variable in discovered
+    )
+
+
+def members_for_model(
+    layers: tuple[GDSPSLayerInfo, ...],
+    model: str,
+    variable: str,
+) -> tuple[int, ...]:
+    """Return the sorted ensemble members for a model/variable (RESPS only)."""
+
+    members = {
+        layer.member
+        for layer in layers
+        if layer.model == model
+        and layer.variable == variable
+        and layer.member is not None
+    }
+    return tuple(sorted(members))
+
+
+def layer_for(
+    layers: tuple[GDSPSLayerInfo, ...],
+    model: str,
+    variable: str,
+    member: int | None = None,
+) -> GDSPSLayerInfo | None:
+    """Return the discovered WMS layer for a model/variable/member, if any."""
+
+    for layer in layers:
+        if (
+            layer.model == model
+            and layer.variable == variable
+            and layer.member == member
+        ):
+            return layer
+    return None
+
+
 def layer_for_variable(
     layers: tuple[GDSPSLayerInfo, ...],
     variable: str,
 ) -> GDSPSLayerInfo | None:
-    """Return the first discovered WMS layer for a variable, if any."""
+    """Return the first discovered WMS layer for a variable, if any.
+
+    Retained for callers that are not model-aware; new code should prefer
+    :func:`layer_for`, which keeps GDSPS and RESPS members distinct.
+    """
 
     for layer in layers:
         if layer.variable == variable:

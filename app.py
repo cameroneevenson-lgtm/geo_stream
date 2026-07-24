@@ -74,6 +74,9 @@ from coastal_flood_explorer.geometry import (
 from coastal_flood_explorer.gdsps_common import (
     GDSPS_DATAMART_PATH,
     GDSPS_DATAMART_ROOT,
+    GDSPS_MODEL,
+    MODEL_DEFINITIONS,
+    RESPS_MODEL,
     GDSPSError,
     GDSPSRun,
 )
@@ -1006,17 +1009,18 @@ def _render_gdsps_controls(
     """Render the GDSPS storm-surge sidebar section and set overlay state."""
 
     st.divider()
-    st.header("GDSPS Storm Surge")
+    st.header("Storm Surge (GDSPS / RESPS)")
     st.caption(
-        "ECCC Global Deterministic Storm Surge Prediction System. ETAS is "
-        "storm-surge elevation; SSH is total water level (not an engineering "
-        "or chart datum). The two are never interchanged."
+        "ECCC storm-surge models. ETAS is storm-surge elevation; SSH is total "
+        "water level (not an engineering or chart datum). The two variables are "
+        "never interchanged, and GDSPS (deterministic) is never mixed with "
+        "RESPS (ensemble)."
     )
     enabled = st.checkbox(
-        "Enable GDSPS storm-surge overlay",
+        "Enable storm-surge overlay",
         key="gdsps_enabled",
         help=(
-            "Overlays the GeoMet WMS storm-surge layer on the map. The "
+            "Overlays the selected GeoMet WMS storm-surge layer on the map. The "
             "numerical subset is a separate, explicit fetch."
         ),
     )
@@ -1037,18 +1041,36 @@ def _render_gdsps_controls(
         st.error("GDSPS discovery failed unexpectedly.")
         return
 
-    variable_options = gdsps_service.variable_options(layers, files)
-    if not variable_options:
+    models = gdsps_service.models_available(layers, files)
+    if not models:
         st.session_state["gdsps_overlay_params"] = None
         message = (
-            "GDSPS storm-surge content is not currently advertised by GeoMet "
-            "and no Datamart NetCDF files were discovered. This is not an "
-            "error — the product may be temporarily unavailable."
+            "Storm-surge content is not currently advertised by GeoMet and no "
+            "Datamart NetCDF files were discovered. This is not an error — the "
+            "product may be temporarily unavailable."
         )
         st.info(message)
         for error in (layers_error, files_error):
             if error:
                 st.caption(error)
+        return
+
+    model = st.selectbox(
+        "Model",
+        models,
+        format_func=lambda code: (
+            "GDSPS — Global Deterministic"
+            if code == GDSPS_MODEL
+            else "RESPS — Regional Ensemble"
+        ),
+        key="gdsps_selected_model",
+    )
+    st.caption(MODEL_DEFINITIONS[model])
+
+    variable_options = gdsps_service.variables_for_model(layers, files, model)
+    if not variable_options:
+        st.session_state["gdsps_overlay_params"] = None
+        st.info(f"No storm-surge variables are currently advertised for {model}.")
         return
 
     variable = st.selectbox(
@@ -1061,21 +1083,40 @@ def _render_gdsps_controls(
         ),
         key="gdsps_selected_variable",
     )
-    layer = gdsps_service.layer_for_variable(layers, variable)
-    runs = gdsps_service.runs_from_files(files, variable)
+
+    member: int | None = None
+    if model == RESPS_MODEL:
+        members = gdsps_service.members_for_model(layers, model, variable)
+        if members:
+            member = st.selectbox(
+                "Ensemble member",
+                members,
+                format_func=lambda number: (
+                    f"{number:02d} (control)" if number == 1 else f"{number:02d}"
+                ),
+                key="gdsps_selected_member",
+                help=(
+                    "RESPS is an ensemble. Members are shown individually and "
+                    "are never averaged."
+                ),
+            )
+
+    layer = gdsps_service.layer_for(layers, model, variable, member)
     run: GDSPSRun | None = None
-    if runs:
-        run = st.selectbox(
-            "Model run",
-            runs,
-            format_func=lambda item: item.label,
-            key="gdsps_selected_run",
-        )
-    else:
-        st.caption(
-            "No dated Datamart runs were discovered; using the current GeoMet "
-            "layer state."
-        )
+    if model == GDSPS_MODEL:
+        runs = gdsps_service.runs_from_files(files, variable)
+        if runs:
+            run = st.selectbox(
+                "Model run",
+                runs,
+                format_func=lambda item: item.label,
+                key="gdsps_selected_run",
+            )
+        else:
+            st.caption(
+                "No dated Datamart runs were discovered; using the current "
+                "GeoMet layer state."
+            )
 
     valid_times = gdsps_service.valid_times(layer, files, variable, run)
     valid_time: datetime | None = None
@@ -1109,24 +1150,34 @@ def _render_gdsps_controls(
         if enabled and layer is None:
             st.warning(
                 f"GeoMet does not currently advertise a WMS overlay for "
-                f"{variable}. The numerical subset may still be available."
+                f"{model} {variable}. The numerical subset may still be "
+                "available."
             )
 
-    fetch = st.button(
-        "Fetch GDSPS numerical subset",
-        type="primary",
-        disabled=bbox is None or active_roi is None,
-        width="stretch",
-        help=(
-            "Draw a region first."
-            if bbox is None
-            else "Retrieve only the drawn region and selected time."
-        ),
-    )
-    if fetch and active_roi is not None:
-        _run_gdsps_fetch(variable, bbox, active_roi, valid_time, run)
-
-    _render_gdsps_download(active_roi)
+    # The numerical subset (WCS→Datamart NetCDF) is wired for the deterministic
+    # GDSPS model only. RESPS numerical retrieval needs a separate Datamart tree
+    # and per-member ensemble handling, so it is intentionally not offered here
+    # rather than silently fetching GDSPS numbers under a RESPS selection.
+    if model == GDSPS_MODEL:
+        fetch = st.button(
+            "Fetch GDSPS numerical subset",
+            type="primary",
+            disabled=bbox is None or active_roi is None,
+            width="stretch",
+            help=(
+                "Draw a region first."
+                if bbox is None
+                else "Retrieve only the drawn region and selected time."
+            ),
+        )
+        if fetch and active_roi is not None:
+            _run_gdsps_fetch(variable, bbox, active_roi, valid_time, run)
+        _render_gdsps_download(active_roi)
+    else:
+        st.caption(
+            "RESPS is available here as a map overlay. A downloadable numerical "
+            "subset is currently provided for GDSPS only."
+        )
 
 
 def _run_gdsps_fetch(

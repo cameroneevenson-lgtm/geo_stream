@@ -135,11 +135,46 @@ resolution; that failure predates this feature and is not touched here. The
 GDSPS modules add 75 dedicated offline tests, all mocking HTTP with no live
 network or OPeNDAP calls.
 
+## Live discovery verification (2026-07-24)
+
+The discovery clients were run against the **live** GeoMet WMS/WCS service for
+the first time and the layer/coverage identifiers are now confirmed, resolving
+the earlier "layer name could not be confirmed" caveat:
+
+- **GDSPS (deterministic):** `GDSPS_15km_StormSurge` = *GDSPS.ETAS – Storm surge
+  [m]*; `GDSPS_15km_SeaSfcHeight` = *GDSPS.SSH – Sea surface height above Mean
+  Water Level [m]*. Same IDs serve as WCS coverage IDs. Datamart: `model_gdsps/`.
+- **RESPS (Regional Ensemble, Atlantic North-West):**
+  `RESPS-Atlantic-North-West_9km_{StormSurge,SeaSfcHeight}_NN` for members
+  `01`–`21` (member 01 = control). A **different model** from GDSPS.
+
+**Bug found and fixed.** `is_gdsps_identifier` (token
+`storm[\s_-]*surge|gdsps|ETAS|SSH`) was used as the discovery gate and, live,
+returned **44 WMS layers where only the 2 GDSPS layers were intended** — it
+swept in all 42 RESPS ensemble layers, the GDSPS/RESPS group containers, the
+footprint outline, and bare `Storm_Surge-Dis` / `StormSurge_-3-3` legend
+styles. Discovery now gates on `classify_model()` (anchored to the model
+acronym, so GDSPS and RESPS are never conflated) plus, for WMS, a real `time`
+dimension (drops groups/footprint/styles). `GDSPSLayerInfo` /
+`GDSPSCoverageInfo` gained `model` + `member`; the sidebar picks
+model → variable → (RESPS) member and the overlay is labelled per model.
+
+Per the "keep both, clearly separated" decision, **RESPS is supported as a
+distinct labelled model** (overlay + WCS coverage). RESPS **numerical subset /
+export is not yet wired** — it needs its own Datamart tree and per-member
+ensemble handling — so the fetch button is offered for GDSPS only and never
+fetches GDSPS numbers under a RESPS selection. Regression tests using the real
+capabilities shape assert exactly the intended data layers survive with correct
+model/member tags (`tests/test_gdsps_wms.py`, `tests/test_gdsps_common.py`,
+`tests/test_gdsps_service.py`).
+
 ## Limitations
 
 - Exploratory visualization only — not a warning service. Official ECCC alerts
   and emergency guidance take precedence.
 - SSH is total water level, not an engineering/chart datum; ETAS is storm-surge
-  elevation. They are never interchanged.
+  elevation. They are never interchanged. GDSPS (deterministic) and RESPS
+  (ensemble) are separate models and are never mixed or averaged.
+- RESPS numerical retrieval/export is not implemented; RESPS is overlay-only.
 - The live WMS overlay and real ECCC network paths are exercised by hand
   outside the automated suite; tests mock all HTTP.

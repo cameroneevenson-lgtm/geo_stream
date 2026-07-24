@@ -843,10 +843,13 @@ def water_level_chart_frame(bundle: CHSWaterLevelBundle) -> pd.DataFrame:
         [rows[timestamp] for timestamp in sorted(rows)],
         columns=CHART_COLUMNS,
     )
+    # Pin nanosecond resolution so the populated frame matches
+    # ``_empty_chart_frame`` regardless of the pandas default datetime unit
+    # (pandas >= 2.2 can otherwise infer microseconds here).
     frame[CHART_TIME_COLUMN] = pd.to_datetime(
         frame[CHART_TIME_COLUMN],
         utc=True,
-    )
+    ).astype("datetime64[ns, UTC]")
     for column in (CHART_OBSERVED_COLUMN, CHART_PREDICTED_COLUMN):
         frame[column] = pd.array(frame[column], dtype="Float64")
     for column in (CHART_OBSERVED_QC_COLUMN, CHART_PREDICTED_QC_COLUMN):

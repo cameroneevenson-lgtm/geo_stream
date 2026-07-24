@@ -59,6 +59,56 @@ defines the GeoJSON filenames. The [MSC Datamart
 documentation](https://eccc-msc.github.io/open-data/msc-datamart/readme_en/)
 documents the rolling retention window.
 
+### GDSPS storm surge
+
+Geo Stream can also overlay and retrieve ECCC's **Global Deterministic Storm
+Surge Prediction System (GDSPS)** — a NEMO-based ocean model that produces
+water-level forecasts on a roughly 1/12° global grid. It is offered as a
+first-class, optional source alongside CHS water levels and the Coastal
+Flooding Risk Index.
+
+**ETAS vs SSH.** GDSPS exposes two distinct variables, and Geo Stream never
+substitutes one for the other:
+
+- **ETAS** — storm-surge elevation (metres). The surge component, derived from
+  total water level by harmonic analysis.
+- **SSH** — total water level / sea-surface height (metres). A modelled total
+  water level; it is **not** an engineering or chart datum.
+
+**GeoMet vs Datamart.** Two official ECCC services back the feature:
+
+- **GeoMet WMS** (`https://geo.weather.gc.ca/geomet`) draws the storm-surge
+  overlay directly on the interactive map, with the forecast-valid time as the
+  WMS `TIME` dimension. The map is the primary visualization — Geo Stream does
+  not build a separate Matplotlib or Plotly chart.
+- **GeoMet WCS** is the preferred numerical source: a `GetCoverage` request
+  returns only the drawn region as NetCDF.
+- **MSC Datamart NetCDF** (`https://dd.weather.gc.ca/model_gdsps/`) is the
+  guaranteed numerical fallback when WCS advertises no matching coverage.
+
+The exact WMS layer name, WCS coverage id, and Datamart filenames are
+**discovered** from the live `GetCapabilities` / directory responses rather
+than hardcoded, mirroring how the Coastal Flooding archive discovers its
+products. If GeoMet advertises no matching content, Geo Stream says so plainly
+and never fabricates an overlay.
+
+**THREDDS/OPeNDAP** is not assumed to exist. A client module is present but
+inert: it activates only when `GDSPS_THREDDS_CATALOG_URL` (in
+`coastal_flood_explorer/gdsps_thredds.py`) is set to a verified official
+catalog. No unconfirmed THREDDS host is shipped.
+
+**Workflow.** Draw an ROI, open the sidebar's **GDSPS Storm Surge** section,
+enable the overlay, pick a variable, model run, and forecast-valid time, and
+adjust opacity (which never triggers a download). Press **Fetch GDSPS
+numerical subset** to retrieve and ROI-mask only the drawn region with Xarray,
+then **Download GDSPS export package (ZIP)**.
+
+**Export format.** The ZIP is model-neutral and contains: a NetCDF subset
+(`gdsps_subset.nc`), a CSV point time series (`point_time_series.csv`), the ROI
+GeoJSON (`roi.geojson`), a metadata JSON (`metadata.json`, including the
+variable definition, source service, bounds, and valid times), and a
+`README.txt`. No native MIKE, Delft3D, SWAN, or HEC-RAS files are produced.
+
 ## How it works
 
 1. On initial load, the app shows recent CHS observations and predictions from
@@ -221,6 +271,13 @@ python -m compileall app.py coastal_flood_explorer watch_and_run.py
 - OpenStreetMap tiles, CHS IWLS, ECCC Datamart, and quick tunnels require
   internet access.
 - A quick tunnel is appropriate only for temporary development and review.
+- GDSPS support discovers its WMS layer, WCS coverage, and Datamart filenames
+  from live ECCC responses; if ECCC changes or withdraws that content the
+  feature reports it as unavailable rather than guessing. GDSPS ETAS is
+  storm-surge elevation and SSH is total water level (not a chart/engineering
+  datum); the two are never interchanged. The live WMS overlay and real ECCC
+  network paths are exercised by hand — the automated test suite mocks all HTTP
+  and makes no live network or OPeNDAP calls.
 
 ## Possible future architecture
 

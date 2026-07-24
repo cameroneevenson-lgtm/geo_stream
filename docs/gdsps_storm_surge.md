@@ -115,17 +115,17 @@ processing, ROI masking, export generation, map overlay, and UI states via
 
 ## Status
 
-- [ ] 1. Refined prompt doc + status tracker (this file)
-- [ ] 2. `requirements.txt` pins + `gdsps_common.py` + tests
-- [ ] 3. `gdsps_wms.py` + tests
-- [ ] 4. `gdsps_wcs.py` + tests
-- [ ] 5. `gdsps_datamart.py` + tests
-- [ ] 6. `gdsps_thredds.py` (endpoint-gated) + tests
-- [ ] 7. `gdsps_processing.py` + tests
-- [ ] 8. `gdsps_export.py` + tests
-- [ ] 9. `map_view.build_gdsps_overlay_layer` + tests
-- [ ] 10. `app.py` sidebar + state + caching + `test_app_ui.py`
-- [ ] 11. `README.md` + `CLAUDE.md` documentation
+- [x] 1. Refined prompt doc + status tracker (this file)
+- [x] 2. `requirements.txt` pins + `gdsps_common.py` + tests
+- [x] 3. `gdsps_wms.py` + tests
+- [x] 4. `gdsps_wcs.py` + tests
+- [x] 5. `gdsps_datamart.py` + tests
+- [x] 6. `gdsps_thredds.py` (endpoint-gated) + tests
+- [x] 7. `gdsps_processing.py` + tests
+- [x] 8. `gdsps_export.py` + tests
+- [x] 9. `map_view.build_gdsps_overlay_layer` + tests
+- [x] 10. `app.py` sidebar + state + caching + `test_app_ui.py`
+- [x] 11. `README.md` + `CLAUDE.md` documentation
 - [ ] 12. Full test run green + status finalized
 
 ## Limitations

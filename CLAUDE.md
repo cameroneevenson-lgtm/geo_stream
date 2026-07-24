@@ -59,6 +59,13 @@ and is importable without Streamlit.
 | `map_view.py` | Folium map, `Draw` toolbar, drawing rehydration, result layer, escaped popups/tooltips, legend, synthetic banner. |
 | `state.py` | `reconcile_drawings` — validates the raw `all_drawings` payload from streamlit-folium into a `DrawingState`. |
 | `synthetic.py` | Locally generated, loudly labelled fake features for UI work when an archive range is empty. |
+| `gdsps_common.py` | GDSPS shared errors (`GDSPSError` under `ECCCError`), value dataclasses, the ETAS/SSH variable vocabulary, and bbox/time helpers. |
+| `gdsps_wms.py` | Hardened GeoMet WMS `GetCapabilities` discovery of GDSPS layers + `time` dimensions, and validated overlay tile params. |
+| `gdsps_wcs.py` | Hardened GeoMet WCS coverage discovery and ROI-subset `GetCoverage` NetCDF fetch; raises `GDSPSDataUnavailableError` to trigger the Datamart fallback. |
+| `gdsps_datamart.py` | Hardened `model_gdsps/` directory crawl, NetCDF filename parsing, and byte download. Guaranteed numerical path. |
+| `gdsps_thredds.py` | Optional OPeNDAP client, inert unless `GDSPS_THREDDS_CATALOG_URL` is set to a verified endpoint. |
+| `gdsps_processing.py` | Pure Xarray/Shapely: open NetCDF bytes, bbox prefilter, exact ROI mask (`shapely.contains_xy`), time select, point series. No I/O. |
+| `gdsps_export.py` | Model-neutral export ZIP (NetCDF, CSV, ROI GeoJSON, metadata JSON, README). No MIKE/Delft3D/SWAN/HEC-RAS. |
 | `watch_and_run.py` | Dev supervisor. Not imported by the app. |
 
 ## Invariants — load-bearing, don't "simplify" them
@@ -84,6 +91,16 @@ and is importable without Streamlit.
   station has no usable bundle, the app may display the most recently
   successful other-station bundle, but must label both the failed station and
   fallback station explicitly and highlight the station supplying the chart.
+- **GDSPS is discovery-based and opacity is download-free.** The WMS layer,
+  WCS coverage, and Datamart filenames are discovered from live ECCC responses,
+  never hardcoded; empty discovery is a plain "unavailable" message, not a
+  fabricated overlay. The overlay reads WMS tiles client-side, so
+  `gdsps_overlay_params` (including opacity) is rebuilt each rerun without any
+  cached Python fetch — never route opacity through a `st.cache_data` fetch.
+  Numerical retrieval is WCS-first, Datamart NetCDF fallback; ROI masking and
+  time selection stay outside the byte caches. **ETAS (storm-surge elevation)
+  and SSH (total water level) are never substituted, and SSH is never labelled
+  an engineering/chart datum.**
 - **Water-level semantics stay explicit.** `wlo` is an observation and `wlp`
   is a tide prediction. Never silently substitute one for the other, hide CHS
   QC/preliminary state, compare absolute heights from different station datums,

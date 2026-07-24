@@ -74,19 +74,13 @@ from coastal_flood_explorer.geometry import (
 from coastal_flood_explorer.gdsps_common import (
     GDSPS_DATAMART_PATH,
     GDSPS_DATAMART_ROOT,
-    GDSPS_VARIABLES,
-    GDSPSDataUnavailableError,
     GDSPSError,
     GDSPSRun,
-    normalize_variable,
 )
+from coastal_flood_explorer import gdsps_service
 from coastal_flood_explorer.gdsps_datamart import GDSPSDatamartClient
 from coastal_flood_explorer.gdsps_export import build_export_zip
-from coastal_flood_explorer.gdsps_processing import subset_netcdf_bytes
-from coastal_flood_explorer.gdsps_wcs import (
-    GDSPSWCSClient,
-    find_coverage_for_variable,
-)
+from coastal_flood_explorer.gdsps_wcs import GDSPSWCSClient
 from coastal_flood_explorer.gdsps_wms import (
     GEOMET_WMS_URL,
     GDSPSWMSClient,
@@ -977,60 +971,6 @@ def _render_chs_water_levels(
         return stations, bundle.station.id, bundle
 
 
-def _gdsps_variable_options(
-    layers: tuple[Any, ...],
-    files: tuple[Any, ...],
-) -> tuple[str, ...]:
-    """Return only the GDSPS variables actually discovered upstream."""
-
-    discovered = {layer.variable for layer in layers if layer.variable}
-    discovered.update(file.variable for file in files)
-    return tuple(
-        variable for variable in GDSPS_VARIABLES if variable in discovered
-    )
-
-
-def _gdsps_layer_for_variable(
-    layers: tuple[Any, ...],
-    variable: str,
-) -> Any | None:
-    for layer in layers:
-        if layer.variable == variable:
-            return layer
-    return None
-
-
-def _gdsps_runs_from_files(
-    files: tuple[Any, ...],
-    variable: str,
-) -> tuple[GDSPSRun, ...]:
-    runs = {
-        file.run.stamp: file.run
-        for file in files
-        if file.variable == variable
-    }
-    return tuple(
-        sorted(runs.values(), key=lambda run: run.issue_time, reverse=True)
-    )
-
-
-def _gdsps_valid_times(
-    layer: Any | None,
-    files: tuple[Any, ...],
-    variable: str,
-    run: GDSPSRun | None,
-) -> tuple[datetime, ...]:
-    if layer is not None and layer.available_times:
-        return tuple(layer.available_times)
-    times = {
-        file.valid_time
-        for file in files
-        if file.variable == variable
-        and (run is None or file.run.stamp == run.stamp)
-    }
-    return tuple(sorted(times))
-
-
 def _gdsps_fetch_numeric(
     variable: str,
     bbox: tuple[float, float, float, float],
@@ -1038,63 +978,25 @@ def _gdsps_fetch_numeric(
     valid_time: datetime | None,
     run: GDSPSRun | None,
 ) -> tuple[Any, str]:
-    """Fetch a ROI-masked subset, preferring WCS then Datamart NetCDF."""
+    """Bind the app's cached fetchers to the pure GDSPS orchestration."""
 
-    coverages, _ = _cached_gdsps_wcs_coverages(GEOMET_WMS_URL)
-    if coverages:
-        try:
-            coverage = find_coverage_for_variable(coverages, variable)
-            data = _cached_gdsps_wcs_bytes(
-                GEOMET_WMS_URL,
-                coverage.coverage_id,
-                bbox,
-                valid_time,
-            )
-            subset = subset_netcdf_bytes(
-                data,
-                roi=roi,
-                variable=variable,
-                valid_times=(valid_time,) if valid_time else None,
-            )
-            return subset, "GeoMet WCS"
-        except GDSPSDataUnavailableError:
-            # Documented fallback: WCS has no coverage for this variable.
-            pass
-
-    files, _ = _cached_gdsps_datamart_files(
-        GDSPS_DATAMART_ROOT,
-        GDSPS_DATAMART_PATH,
+    return gdsps_service.fetch_numeric(
+        variable,
+        bbox,
+        roi,
+        valid_time,
+        run,
+        wcs_coverages=lambda: _cached_gdsps_wcs_coverages(GEOMET_WMS_URL),
+        wcs_bytes=lambda coverage_id, box, time: _cached_gdsps_wcs_bytes(
+            GEOMET_WMS_URL, coverage_id, box, time
+        ),
+        datamart_files=lambda: _cached_gdsps_datamart_files(
+            GDSPS_DATAMART_ROOT, GDSPS_DATAMART_PATH
+        ),
+        datamart_bytes=lambda url: _cached_gdsps_datamart_bytes(
+            GDSPS_DATAMART_ROOT, GDSPS_DATAMART_PATH, url
+        ),
     )
-    candidates = [
-        file
-        for file in files
-        if file.variable == variable
-        and (run is None or file.run.stamp == run.stamp)
-    ]
-    if not candidates:
-        raise GDSPSDataUnavailableError(
-            "No GDSPS numerical data is available for this selection from "
-            "GeoMet WCS or the MSC Datamart."
-        )
-    if valid_time is not None:
-        chosen = min(
-            candidates,
-            key=lambda file: abs(file.valid_time - valid_time),
-        )
-    else:
-        chosen = candidates[0]
-    data = _cached_gdsps_datamart_bytes(
-        GDSPS_DATAMART_ROOT,
-        GDSPS_DATAMART_PATH,
-        chosen.url,
-    )
-    subset = subset_netcdf_bytes(
-        data,
-        roi=roi,
-        variable=variable,
-        valid_times=(chosen.valid_time,),
-    )
-    return subset, "MSC Datamart"
 
 
 def _render_gdsps_controls(
@@ -1135,7 +1037,7 @@ def _render_gdsps_controls(
         st.error("GDSPS discovery failed unexpectedly.")
         return
 
-    variable_options = _gdsps_variable_options(layers, files)
+    variable_options = gdsps_service.variable_options(layers, files)
     if not variable_options:
         st.session_state["gdsps_overlay_params"] = None
         message = (
@@ -1159,8 +1061,8 @@ def _render_gdsps_controls(
         ),
         key="gdsps_selected_variable",
     )
-    layer = _gdsps_layer_for_variable(layers, variable)
-    runs = _gdsps_runs_from_files(files, variable)
+    layer = gdsps_service.layer_for_variable(layers, variable)
+    runs = gdsps_service.runs_from_files(files, variable)
     run: GDSPSRun | None = None
     if runs:
         run = st.selectbox(
@@ -1175,7 +1077,7 @@ def _render_gdsps_controls(
             "layer state."
         )
 
-    valid_times = _gdsps_valid_times(layer, files, variable, run)
+    valid_times = gdsps_service.valid_times(layer, files, variable, run)
     valid_time: datetime | None = None
     if valid_times:
         valid_time = st.selectbox(

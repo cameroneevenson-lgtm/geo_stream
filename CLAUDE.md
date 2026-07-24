@@ -65,6 +65,7 @@ and is importable without Streamlit.
 | `gdsps_datamart.py` | Hardened `model_gdsps/` directory crawl, NetCDF filename parsing, and byte download. Guaranteed numerical path. |
 | `gdsps_thredds.py` | Optional OPeNDAP client, inert unless `GDSPS_THREDDS_CATALOG_URL` is set to a verified endpoint. |
 | `gdsps_processing.py` | Pure Xarray/Shapely: open NetCDF bytes, bbox prefilter, exact ROI mask (`shapely.contains_xy`), time select, point series. No I/O. |
+| `gdsps_service.py` | Pure GDSPS selection helpers + WCS→Datamart fetch orchestration with injected fetchers. Keeps decision logic out of `app.py`. |
 | `gdsps_export.py` | Model-neutral export ZIP (NetCDF, CSV, ROI GeoJSON, metadata JSON, README). No MIKE/Delft3D/SWAN/HEC-RAS. |
 | `watch_and_run.py` | Dev supervisor. Not imported by the app. |
 

@@ -126,7 +126,14 @@ processing, ROI masking, export generation, map overlay, and UI states via
 - [x] 9. `map_view.build_gdsps_overlay_layer` + tests
 - [x] 10. `app.py` sidebar + state + caching + `test_app_ui.py`
 - [x] 11. `README.md` + `CLAUDE.md` documentation
-- [ ] 12. Full test run green + status finalized
+- [x] 12. Full test run green + status finalized
+
+All GDSPS work is complete. The full offline suite passes (430 passed) apart
+from one pre-existing, unrelated `test_chs.py` assertion that pins
+`datetime64[ns, UTC]` while this environment's newer pandas produces `us`
+resolution; that failure predates this feature and is not touched here. The
+GDSPS modules add 75 dedicated offline tests, all mocking HTTP with no live
+network or OPeNDAP calls.
 
 ## Limitations
 

@@ -450,6 +450,63 @@ def build_result_layer(
     return group
 
 
+GDSPS_LAYER_NAME = "GDSPS Storm Surge"
+WMS_ATTRIBUTION_FALLBACK = "Environment and Climate Change Canada — GeoMet"
+
+
+def build_gdsps_overlay_layer(
+    params: Mapping[str, Any] | None,
+    *,
+    enabled: bool = True,
+) -> folium.FeatureGroup:
+    """Wrap a discovered GDSPS WMS layer in a controllable overlay group.
+
+    The browser fetches WMS tiles directly from GeoMet, so rebuilding this
+    layer when the opacity slider moves never triggers a Python-side download.
+    A disabled or missing layer yields an empty, still-listed overlay group so
+    the layer control stays stable.
+    """
+
+    group = folium.FeatureGroup(
+        name=GDSPS_LAYER_NAME,
+        control=True,
+        show=bool(enabled),
+    )
+    if not enabled or not isinstance(params, Mapping):
+        return group
+    url = params.get("url")
+    layers = params.get("layers")
+    if not isinstance(url, str) or not isinstance(layers, str):
+        return group
+
+    extra: dict[str, Any] = {}
+    time_value = params.get("time")
+    if isinstance(time_value, str) and time_value:
+        extra["TIME"] = time_value
+    opacity = params.get("opacity", 0.7)
+    try:
+        opacity_value = float(opacity)
+    except (TypeError, ValueError):
+        opacity_value = 0.7
+    wms = folium.raster_layers.WmsTileLayer(
+        url=url,
+        layers=layers,
+        styles=str(params.get("styles", "")),
+        fmt=str(params.get("fmt", "image/png")),
+        transparent=bool(params.get("transparent", True)),
+        version=str(params.get("version", "1.3.0")),
+        attr=str(params.get("attribution") or WMS_ATTRIBUTION_FALLBACK),
+        name=GDSPS_LAYER_NAME,
+        overlay=True,
+        control=False,
+        show=True,
+        opacity=opacity_value,
+        **extra,
+    )
+    wms.add_to(group)
+    return group
+
+
 def _station_popup_html(
     station: CHSStation,
     *,

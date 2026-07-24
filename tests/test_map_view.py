@@ -17,9 +17,11 @@ from coastal_flood_explorer.map_view import (
     DEFAULT_CENTER,
     DEFAULT_ZOOM,
     MIN_ZOOM,
+    GDSPS_LAYER_NAME,
     build_base_map,
     build_chs_station_layer,
     build_drawing_hydration_layer,
+    build_gdsps_overlay_layer,
     build_layer_control,
     build_result_layer,
     risk_legend_html,
@@ -296,3 +298,53 @@ def test_chs_station_layer_skips_invalid_coordinates() -> None:
     rendered = map_object.get_root().render()
 
     assert "Invalid location" not in rendered
+
+
+def _gdsps_params(time: str | None = "2026-07-22T01:00:00Z") -> dict:
+    return {
+        "url": "https://geo.weather.gc.ca/geomet",
+        "layers": "GDSPS.ETAS",
+        "styles": "",
+        "fmt": "image/png",
+        "transparent": True,
+        "version": "1.3.0",
+        "opacity": 0.6,
+        "time": time,
+        "attribution": "ECCC GeoMet",
+        "variable": "ETAS",
+    }
+
+
+def test_gdsps_overlay_renders_wms_layer() -> None:
+    map_object = folium.Map()
+    build_gdsps_overlay_layer(_gdsps_params()).add_to(map_object)
+    rendered = map_object.get_root().render()
+    assert "geo.weather.gc.ca/geomet" in rendered
+    assert "GDSPS.ETAS" in rendered
+    assert "2026-07-22T01:00:00Z" in rendered
+
+
+def test_gdsps_overlay_disabled_is_empty_group() -> None:
+    group = build_gdsps_overlay_layer(_gdsps_params(), enabled=False)
+    assert isinstance(group, folium.FeatureGroup)
+    map_object = folium.Map()
+    group.add_to(map_object)
+    rendered = map_object.get_root().render()
+    assert "GDSPS.ETAS" not in rendered
+
+
+def test_gdsps_overlay_none_params_is_empty_group() -> None:
+    group = build_gdsps_overlay_layer(None)
+    map_object = folium.Map()
+    group.add_to(map_object)
+    rendered = map_object.get_root().render()
+    assert "WmsTileLayer" not in rendered or "GDSPS.ETAS" not in rendered
+    assert group.layer_name == GDSPS_LAYER_NAME
+
+
+def test_gdsps_overlay_omits_time_when_absent() -> None:
+    map_object = folium.Map()
+    build_gdsps_overlay_layer(_gdsps_params(time=None)).add_to(map_object)
+    rendered = map_object.get_root().render()
+    assert "GDSPS.ETAS" in rendered
+    assert "&time=" not in rendered.lower()

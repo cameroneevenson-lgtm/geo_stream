@@ -71,10 +71,32 @@ from coastal_flood_explorer.geometry import (
     rank_points_for_roi,
     roi_bbox,
 )
+from coastal_flood_explorer.gdsps_common import (
+    GDSPS_DATAMART_PATH,
+    GDSPS_DATAMART_ROOT,
+    GDSPS_VARIABLES,
+    GDSPSDataUnavailableError,
+    GDSPSError,
+    GDSPSRun,
+    normalize_variable,
+)
+from coastal_flood_explorer.gdsps_datamart import GDSPSDatamartClient
+from coastal_flood_explorer.gdsps_export import build_export_zip
+from coastal_flood_explorer.gdsps_processing import subset_netcdf_bytes
+from coastal_flood_explorer.gdsps_wcs import (
+    GDSPSWCSClient,
+    find_coverage_for_variable,
+)
+from coastal_flood_explorer.gdsps_wms import (
+    GEOMET_WMS_URL,
+    GDSPSWMSClient,
+    build_wms_tile_params,
+)
 from coastal_flood_explorer.map_view import (
     build_base_map,
     build_chs_station_layer,
     build_drawing_hydration_layer,
+    build_gdsps_overlay_layer,
     build_layer_control,
     build_result_layer,
     risk_legend_html,
@@ -96,7 +118,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 
 LOGGER = logging.getLogger("geo_stream.app")
-MAP_COMPONENT_KEY = "coastal-flood-map-v5"
+MAP_COMPONENT_KEY = "coastal-flood-map-v6"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -121,6 +143,15 @@ STATE_DEFAULTS: dict[str, Any] = {
     "chs_bundles": {},
     "chs_selection_roi": None,
     "selected_chs_station_id": None,
+    "gdsps_enabled": False,
+    "gdsps_overlay_params": None,
+    "gdsps_opacity": 0.7,
+    "gdsps_export_bytes": None,
+    "gdsps_export_name": None,
+    "gdsps_source_service": None,
+    "gdsps_fetch_roi": None,
+    "gdsps_point_series": None,
+    "gdsps_subset_summary": None,
 }
 
 
@@ -174,6 +205,70 @@ def _cached_chs_bundle(
     except CHSError as exc:
         warnings = tuple(getattr(exc, "warnings", ()))
         return None, str(exc), warnings
+
+
+@st.cache_data(ttl=900, max_entries=4, show_spinner=False)
+def _cached_gdsps_wms_layers(endpoint: str) -> tuple[tuple[Any, ...], str | None]:
+    """Discover and cache GDSPS WMS layers, including safe failures."""
+
+    try:
+        return tuple(GDSPSWMSClient(endpoint).discover_layers()), None
+    except GDSPSError as exc:
+        return (), str(exc)
+
+
+@st.cache_data(ttl=900, max_entries=4, show_spinner=False)
+def _cached_gdsps_wcs_coverages(
+    endpoint: str,
+) -> tuple[tuple[Any, ...], str | None]:
+    """Discover and cache GDSPS WCS coverages, including safe failures."""
+
+    try:
+        return tuple(GDSPSWCSClient(endpoint).discover_coverages()), None
+    except GDSPSError as exc:
+        return (), str(exc)
+
+
+@st.cache_data(ttl=900, max_entries=4, show_spinner=False)
+def _cached_gdsps_datamart_files(
+    root: str,
+    base_path: str,
+) -> tuple[tuple[Any, ...], str | None]:
+    """Discover and cache GDSPS Datamart NetCDF files, including failures."""
+
+    try:
+        client = GDSPSDatamartClient(root=root, base_path=base_path)
+        return tuple(client.discover_files()), None
+    except GDSPSError as exc:
+        return (), str(exc)
+
+
+@st.cache_data(ttl=900, max_entries=32, show_spinner=False)
+def _cached_gdsps_wcs_bytes(
+    endpoint: str,
+    coverage_id: str,
+    bbox: tuple[float, float, float, float],
+    time: datetime | None,
+) -> bytes:
+    """Fetch and cache a WCS NetCDF subset keyed by primitive request args."""
+
+    return GDSPSWCSClient(endpoint).fetch_coverage(
+        coverage_id,
+        bbox=bbox,
+        time=time,
+    )
+
+
+@st.cache_data(ttl=900, max_entries=32, show_spinner=False)
+def _cached_gdsps_datamart_bytes(
+    root: str,
+    base_path: str,
+    url: str,
+) -> bytes:
+    """Fetch and cache one Datamart NetCDF file's bytes keyed by its URL."""
+
+    client = GDSPSDatamartClient(root=root, base_path=base_path)
+    return client.download(url)
 
 
 def _initialize_state() -> None:
@@ -882,6 +977,388 @@ def _render_chs_water_levels(
         return stations, bundle.station.id, bundle
 
 
+def _gdsps_variable_options(
+    layers: tuple[Any, ...],
+    files: tuple[Any, ...],
+) -> tuple[str, ...]:
+    """Return only the GDSPS variables actually discovered upstream."""
+
+    discovered = {layer.variable for layer in layers if layer.variable}
+    discovered.update(file.variable for file in files)
+    return tuple(
+        variable for variable in GDSPS_VARIABLES if variable in discovered
+    )
+
+
+def _gdsps_layer_for_variable(
+    layers: tuple[Any, ...],
+    variable: str,
+) -> Any | None:
+    for layer in layers:
+        if layer.variable == variable:
+            return layer
+    return None
+
+
+def _gdsps_runs_from_files(
+    files: tuple[Any, ...],
+    variable: str,
+) -> tuple[GDSPSRun, ...]:
+    runs = {
+        file.run.stamp: file.run
+        for file in files
+        if file.variable == variable
+    }
+    return tuple(
+        sorted(runs.values(), key=lambda run: run.issue_time, reverse=True)
+    )
+
+
+def _gdsps_valid_times(
+    layer: Any | None,
+    files: tuple[Any, ...],
+    variable: str,
+    run: GDSPSRun | None,
+) -> tuple[datetime, ...]:
+    if layer is not None and layer.available_times:
+        return tuple(layer.available_times)
+    times = {
+        file.valid_time
+        for file in files
+        if file.variable == variable
+        and (run is None or file.run.stamp == run.stamp)
+    }
+    return tuple(sorted(times))
+
+
+def _gdsps_fetch_numeric(
+    variable: str,
+    bbox: tuple[float, float, float, float],
+    roi: Mapping[str, Any],
+    valid_time: datetime | None,
+    run: GDSPSRun | None,
+) -> tuple[Any, str]:
+    """Fetch a ROI-masked subset, preferring WCS then Datamart NetCDF."""
+
+    coverages, _ = _cached_gdsps_wcs_coverages(GEOMET_WMS_URL)
+    if coverages:
+        try:
+            coverage = find_coverage_for_variable(coverages, variable)
+            data = _cached_gdsps_wcs_bytes(
+                GEOMET_WMS_URL,
+                coverage.coverage_id,
+                bbox,
+                valid_time,
+            )
+            subset = subset_netcdf_bytes(
+                data,
+                roi=roi,
+                variable=variable,
+                valid_times=(valid_time,) if valid_time else None,
+            )
+            return subset, "GeoMet WCS"
+        except GDSPSDataUnavailableError:
+            # Documented fallback: WCS has no coverage for this variable.
+            pass
+
+    files, _ = _cached_gdsps_datamart_files(
+        GDSPS_DATAMART_ROOT,
+        GDSPS_DATAMART_PATH,
+    )
+    candidates = [
+        file
+        for file in files
+        if file.variable == variable
+        and (run is None or file.run.stamp == run.stamp)
+    ]
+    if not candidates:
+        raise GDSPSDataUnavailableError(
+            "No GDSPS numerical data is available for this selection from "
+            "GeoMet WCS or the MSC Datamart."
+        )
+    if valid_time is not None:
+        chosen = min(
+            candidates,
+            key=lambda file: abs(file.valid_time - valid_time),
+        )
+    else:
+        chosen = candidates[0]
+    data = _cached_gdsps_datamart_bytes(
+        GDSPS_DATAMART_ROOT,
+        GDSPS_DATAMART_PATH,
+        chosen.url,
+    )
+    subset = subset_netcdf_bytes(
+        data,
+        roi=roi,
+        variable=variable,
+        valid_times=(chosen.valid_time,),
+    )
+    return subset, "MSC Datamart"
+
+
+def _render_gdsps_controls(
+    bbox: tuple[float, float, float, float] | None,
+    active_roi: Mapping[str, Any] | None,
+) -> None:
+    """Render the GDSPS storm-surge sidebar section and set overlay state."""
+
+    st.divider()
+    st.header("GDSPS Storm Surge")
+    st.caption(
+        "ECCC Global Deterministic Storm Surge Prediction System. ETAS is "
+        "storm-surge elevation; SSH is total water level (not an engineering "
+        "or chart datum). The two are never interchanged."
+    )
+    enabled = st.checkbox(
+        "Enable GDSPS storm-surge overlay",
+        key="gdsps_enabled",
+        help=(
+            "Overlays the GeoMet WMS storm-surge layer on the map. The "
+            "numerical subset is a separate, explicit fetch."
+        ),
+    )
+    if st.button("Refresh available runs", width="stretch"):
+        _cached_gdsps_wms_layers.clear()
+        _cached_gdsps_wcs_coverages.clear()
+        _cached_gdsps_datamart_files.clear()
+
+    try:
+        layers, layers_error = _cached_gdsps_wms_layers(GEOMET_WMS_URL)
+        files, files_error = _cached_gdsps_datamart_files(
+            GDSPS_DATAMART_ROOT,
+            GDSPS_DATAMART_PATH,
+        )
+    except Exception:
+        LOGGER.exception("Unexpected GDSPS discovery failure")
+        st.session_state["gdsps_overlay_params"] = None
+        st.error("GDSPS discovery failed unexpectedly.")
+        return
+
+    variable_options = _gdsps_variable_options(layers, files)
+    if not variable_options:
+        st.session_state["gdsps_overlay_params"] = None
+        message = (
+            "GDSPS storm-surge content is not currently advertised by GeoMet "
+            "and no Datamart NetCDF files were discovered. This is not an "
+            "error — the product may be temporarily unavailable."
+        )
+        st.info(message)
+        for error in (layers_error, files_error):
+            if error:
+                st.caption(error)
+        return
+
+    variable = st.selectbox(
+        "Variable",
+        variable_options,
+        format_func=lambda code: (
+            f"{code} — storm-surge elevation"
+            if code == "ETAS"
+            else f"{code} — total water level"
+        ),
+        key="gdsps_selected_variable",
+    )
+    layer = _gdsps_layer_for_variable(layers, variable)
+    runs = _gdsps_runs_from_files(files, variable)
+    run: GDSPSRun | None = None
+    if runs:
+        run = st.selectbox(
+            "Model run",
+            runs,
+            format_func=lambda item: item.label,
+            key="gdsps_selected_run",
+        )
+    else:
+        st.caption(
+            "No dated Datamart runs were discovered; using the current GeoMet "
+            "layer state."
+        )
+
+    valid_times = _gdsps_valid_times(layer, files, variable, run)
+    valid_time: datetime | None = None
+    if valid_times:
+        valid_time = st.selectbox(
+            "Forecast-valid time (UTC)",
+            valid_times,
+            format_func=format_utc_datetime,
+            key="gdsps_selected_valid_time",
+        )
+    else:
+        st.caption("No forecast-valid times were advertised for this variable.")
+
+    opacity = st.slider(
+        "Overlay opacity",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.05,
+        key="gdsps_opacity",
+        help="Adjusting opacity never triggers another download.",
+    )
+
+    if enabled and layer is not None:
+        st.session_state["gdsps_overlay_params"] = build_wms_tile_params(
+            layer,
+            time=valid_time,
+            opacity=float(opacity),
+        )
+    else:
+        st.session_state["gdsps_overlay_params"] = None
+        if enabled and layer is None:
+            st.warning(
+                f"GeoMet does not currently advertise a WMS overlay for "
+                f"{variable}. The numerical subset may still be available."
+            )
+
+    fetch = st.button(
+        "Fetch GDSPS numerical subset",
+        type="primary",
+        disabled=bbox is None or active_roi is None,
+        width="stretch",
+        help=(
+            "Draw a region first."
+            if bbox is None
+            else "Retrieve only the drawn region and selected time."
+        ),
+    )
+    if fetch and active_roi is not None:
+        _run_gdsps_fetch(variable, bbox, active_roi, valid_time, run)
+
+    _render_gdsps_download(active_roi)
+
+
+def _run_gdsps_fetch(
+    variable: str,
+    bbox: tuple[float, float, float, float] | None,
+    active_roi: Mapping[str, Any],
+    valid_time: datetime | None,
+    run: GDSPSRun | None,
+) -> None:
+    if bbox is None:
+        return
+    status = st.status(
+        "Fetching GDSPS numerical subset…",
+        expanded=False,
+        state="running",
+    )
+    try:
+        with status:
+            subset, service = _gdsps_fetch_numeric(
+                variable,
+                bbox,
+                active_roi,
+                valid_time,
+                run,
+            )
+            export_bytes = build_export_zip(
+                subset,
+                roi=active_roi,
+                source_service=service,
+                run=run,
+            )
+        stamp = (
+            valid_time.strftime("%Y%m%dT%H%M%SZ")
+            if valid_time is not None
+            else "latest"
+        )
+        st.session_state["gdsps_export_bytes"] = export_bytes
+        st.session_state["gdsps_export_name"] = (
+            f"gdsps_{variable.lower()}_{stamp}.zip"
+        )
+        st.session_state["gdsps_source_service"] = service
+        st.session_state["gdsps_fetch_roi"] = copy.deepcopy(dict(active_roi))
+        st.session_state["gdsps_point_series"] = subset.point_series
+        st.session_state["gdsps_subset_summary"] = {
+            "variable": subset.variable,
+            "variable_name": subset.variable_name,
+            "units": subset.units,
+            "service": service,
+            "cells": int(
+                subset.dataset[subset.variable_name].notnull().sum().item()
+            ),
+            "warnings": list(subset.warnings),
+        }
+        status.update(
+            label=(
+                f"GDSPS {variable} subset loaded from {service}"
+            ),
+            state="complete",
+            expanded=False,
+        )
+    except (GDSPSError, GeometryError) as exc:
+        LOGGER.warning("GDSPS fetch failed: %s", exc, exc_info=True)
+        status.update(
+            label="GDSPS numerical fetch failed",
+            state="error",
+            expanded=True,
+        )
+        st.error(str(exc))
+    except Exception:
+        LOGGER.exception("Unexpected GDSPS numerical failure")
+        status.update(
+            label="GDSPS numerical fetch failed",
+            state="error",
+            expanded=True,
+        )
+        st.error(
+            "An unexpected error occurred while fetching the GDSPS subset."
+        )
+
+
+def _render_gdsps_download(active_roi: Mapping[str, Any] | None) -> None:
+    export_bytes = st.session_state.get("gdsps_export_bytes")
+    if not isinstance(export_bytes, (bytes, bytearray)):
+        return
+    fetch_roi = st.session_state.get("gdsps_fetch_roi")
+    stale = not roi_matches(active_roi, fetch_roi)
+    if stale:
+        st.info(
+            "The GDSPS subset was fetched for a different region. Fetch again "
+            "before downloading."
+        )
+    st.download_button(
+        "Download GDSPS export package (ZIP)",
+        data=bytes(export_bytes),
+        file_name=st.session_state.get("gdsps_export_name")
+        or "gdsps_export.zip",
+        mime="application/zip",
+        disabled=stale,
+        width="stretch",
+    )
+
+
+def _render_gdsps_results() -> None:
+    """Render the GDSPS numerical subset summary and point series (no chart)."""
+
+    summary = st.session_state.get("gdsps_subset_summary")
+    if not isinstance(summary, Mapping):
+        return
+    st.subheader("GDSPS storm-surge subset")
+    variable = summary.get("variable")
+    definition = (
+        "Storm-surge elevation (not total water level)."
+        if variable == "ETAS"
+        else "Total water level / sea-surface height (not an engineering datum)."
+    )
+    st.caption(
+        f"Variable **{variable}** — {definition} Source: "
+        f"{summary.get('service', 'unknown')}."
+    )
+    columns = st.columns(3)
+    columns[0].metric("Variable", str(variable))
+    columns[1].metric("Units", str(summary.get("units") or "—"))
+    columns[2].metric("Masked grid cells", summary.get("cells", 0))
+    point_series = st.session_state.get("gdsps_point_series")
+    if point_series is not None:
+        st.caption(
+            "Point time series at the ROI representative point (tabular, not a "
+            "separate chart):"
+        )
+        st.dataframe(point_series, width="stretch", hide_index=True)
+    for warning in summary.get("warnings", []):
+        st.caption(f"Note: {warning}")
+
+
 def _render_sidebar() -> tuple[FilterCriteria, str | None]:
     action_error: str | None = None
     bbox = _current_bbox()
@@ -1256,6 +1733,8 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                 action_error = (
                     "Synthetic test data could not be generated for this ROI."
                 )
+
+        _render_gdsps_controls(bbox, st.session_state.get("active_roi"))
 
         clipped_data = st.session_state.get("clipped_data")
         options = forecast_period_options(clipped_data)
@@ -1697,6 +2176,10 @@ def main() -> None:
         selected_station_id=selected_chs_station_id,
         bundle=chs_bundle,
     )
+    gdsps_layer = build_gdsps_overlay_layer(
+        st.session_state.get("gdsps_overlay_params"),
+        enabled=bool(st.session_state.get("gdsps_enabled")),
+    )
     map_payload = st_folium(
         base_map,
         key=MAP_COMPONENT_KEY,
@@ -1707,6 +2190,7 @@ def main() -> None:
             drawing_layer,
             result_layer,
             chs_station_layer,
+            gdsps_layer,
         ],
         layer_control=build_layer_control(),
         on_change=_sync_map_drawings,
@@ -1725,6 +2209,7 @@ def main() -> None:
     )
 
     _render_animation(criteria, stale=stale)
+    _render_gdsps_results()
     _render_results(filtered, stale=stale)
 
 

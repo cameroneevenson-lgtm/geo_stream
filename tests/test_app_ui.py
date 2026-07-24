@@ -115,6 +115,25 @@ fake_catalog.clear = lambda: None
 fake_bundle.clear = lambda: None
 app_module._cached_chs_catalog = fake_catalog
 app_module._cached_chs_bundle = fake_bundle
+
+original_gdsps_wms = app_module._cached_gdsps_wms_layers
+original_gdsps_wcs = app_module._cached_gdsps_wcs_coverages
+original_gdsps_files = app_module._cached_gdsps_datamart_files
+
+def fake_gdsps_wms(endpoint):
+    return (), None
+
+def fake_gdsps_wcs(endpoint):
+    return (), None
+
+def fake_gdsps_files(root, base_path):
+    return (), None
+
+for _fake in (fake_gdsps_wms, fake_gdsps_wcs, fake_gdsps_files):
+    _fake.clear = lambda: None
+app_module._cached_gdsps_wms_layers = fake_gdsps_wms
+app_module._cached_gdsps_wcs_coverages = fake_gdsps_wcs
+app_module._cached_gdsps_datamart_files = fake_gdsps_files
 {extra_setup}
 try:
     app_module.main()
@@ -122,6 +141,9 @@ finally:
     {extra_teardown}
     app_module._cached_chs_catalog = original_catalog
     app_module._cached_chs_bundle = original_bundle
+    app_module._cached_gdsps_wms_layers = original_gdsps_wms
+    app_module._cached_gdsps_wcs_coverages = original_gdsps_wcs
+    app_module._cached_gdsps_datamart_files = original_gdsps_files
 """
 
 
@@ -862,4 +884,61 @@ def test_manual_station_without_roi_is_not_called_the_default() -> None:
     assert not any(
         "ROI Gauge (99991) is the national default" in element.value
         for element in app.info
+    )
+
+
+def test_gdsps_section_shows_unavailable_when_nothing_discovered() -> None:
+    app = AppTest.from_string(
+        _app_with_fake_chs(),
+        default_timeout=20,
+    ).run()
+
+    assert not list(app.exception)
+    assert any(
+        "GDSPS storm-surge content is not currently advertised" in element.value
+        for element in app.info
+    )
+    # No overlay params are set when nothing is discovered.
+    assert app.session_state["gdsps_overlay_params"] is None
+
+
+def test_gdsps_overlay_params_set_when_layer_discovered_and_enabled() -> None:
+    setup = """
+from datetime import datetime, timezone
+from coastal_flood_explorer.gdsps_common import GDSPSLayerInfo
+
+layer = GDSPSLayerInfo(
+    name="GDSPS.ETAS",
+    title="Storm surge elevation",
+    variable="ETAS",
+    available_times=(datetime(2026, 7, 22, 1, tzinfo=timezone.utc),),
+)
+
+def fake_gdsps_wms_layers(endpoint):
+    return (layer,), None
+fake_gdsps_wms_layers.clear = lambda: None
+app_module._cached_gdsps_wms_layers = fake_gdsps_wms_layers
+app_module.st.session_state["gdsps_enabled"] = True
+"""
+    app = AppTest.from_string(
+        _app_with_fake_chs(extra_setup=setup),
+        default_timeout=20,
+    ).run()
+
+    assert not list(app.exception)
+    params = app.session_state["gdsps_overlay_params"]
+    assert isinstance(params, dict)
+    assert params["layers"] == "GDSPS.ETAS"
+    assert params["variable"] == "ETAS"
+
+
+def test_gdsps_download_absent_before_fetch() -> None:
+    app = AppTest.from_string(
+        _app_with_fake_chs(),
+        default_timeout=20,
+    ).run()
+    assert not list(app.exception)
+    assert not any(
+        "Download GDSPS export package" in button.label
+        for button in app.download_button
     )

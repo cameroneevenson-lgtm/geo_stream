@@ -162,27 +162,48 @@ class GDSPSDatamartClient:
             raise GDSPSConfigurationError(
                 "A discovered GDSPS Datamart file is required for download."
             )
-        response = self._get(file.url)
+        return self.download(file.url)
+
+    def download(self, url: str) -> bytes:
+        """Download one NetCDF URL's bytes with same-tree hardening.
+
+        The URL must resolve inside the configured origin and base path; this
+        primitive is safe to wrap in a URL-keyed cache.
+        """
+
+        start_url = f"{self.root}{self.base_path}"
+        safe = _safe_child_url(
+            url,
+            directory_url=start_url,
+            expected_origin=self._origin,
+            base_path=self.base_path,
+        )
+        if safe is None or safe.endswith("/"):
+            raise GDSPSConfigurationError(
+                "The GDSPS Datamart URL is not within the configured tree."
+            )
+        filename = urlsplit(safe).path.rsplit("/", 1)[-1]
+        response = self._get(safe)
         media_type = _content_type(response)
         if media_type is not None and media_type in HTML_MEDIA_TYPES:
             raise GDSPSResponseError(
                 f"The Datamart returned HTML instead of NetCDF for "
-                f"{file.filename}."
+                f"{filename}."
             )
         content = response.content
         if not isinstance(content, (bytes, bytearray)) or not content:
             raise GDSPSResponseError(
-                f"The Datamart returned no data for {file.filename}."
+                f"The Datamart returned no data for {filename}."
             )
         if len(content) > MAX_FILE_BYTES:
             raise GDSPSResponseError(
-                f"The Datamart file {file.filename} was unexpectedly large, so "
+                f"The Datamart file {filename} was unexpectedly large, so "
                 "retrieval was stopped."
             )
         if media_type is not None and media_type not in NETCDF_MEDIA_TYPES:
             raise GDSPSResponseError(
                 f"The Datamart returned an unsupported content type for "
-                f"{file.filename}."
+                f"{filename}."
             )
         return bytes(content)
 

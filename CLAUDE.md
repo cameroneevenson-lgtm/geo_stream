@@ -98,10 +98,14 @@ and is importable without Streamlit.
   fabricated overlay. The overlay reads WMS tiles client-side, so
   `gdsps_overlay_params` (including opacity) is rebuilt each rerun without any
   cached Python fetch — never route opacity through a `st.cache_data` fetch.
-  Numerical retrieval is WCS-first, Datamart NetCDF fallback; ROI masking and
-  time selection stay outside the byte caches. **ETAS (storm-surge elevation)
-  and SSH (total water level) are never substituted, and SSH is never labelled
-  an engineering/chart datum.**
+  **Numerical retrieval is Datamart-first for GDSPS**, WCS latest-slice
+  fallback: GeoMet serves the surge coverages as a single latest 2-D slice with
+  **no WCS time axis** (`axisLabels="lat long"`, verified live), so a
+  time-specific request cannot go through WCS — the Datamart's per-lead-time
+  files are the only real forecast series. ROI masking and time selection stay
+  outside the byte caches. **ETAS (storm-surge elevation) and SSH (total water
+  level) are never substituted, and SSH is never labelled an engineering/chart
+  datum.**
 - **GDSPS and RESPS are separate models, told apart by `classify_model`, never
   by the word "storm surge".** Live GeoMet advertises the deterministic GDSPS
   layers (`GDSPS_15km_StormSurge`=ETAS, `GDSPS_15km_SeaSfcHeight`=SSH) *and* the

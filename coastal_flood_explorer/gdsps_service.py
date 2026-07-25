@@ -21,6 +21,8 @@ from .gdsps_common import (
     GDSPSCoverageInfo,
     GDSPSDatamartFile,
     GDSPSLayerInfo,
+    GDSPSRequestError,
+    GDSPSResponseError,
     GDSPSRun,
     bbox_intersects,
 )
@@ -245,47 +247,47 @@ def fetch_numeric(
 ) -> tuple[GDSPSSubset, str]:
     """Fetch a ROI-masked subset for one model/variable/member.
 
-    WCS is preferred (it serves both models and every RESPS ensemble member);
-    the MSC Datamart NetCDF fallback exists for the deterministic GDSPS only,
-    because the RESPS Datamart tree carries no per-member files. A RESPS request
-    can therefore never fall through to GDSPS numbers. Network operations are
-    injected so this orchestration is offline-testable. Returns the processed
-    subset and a human-readable source-service label.
+    GeoMet serves the storm-surge coverages as a single *latest* 2-D slice with
+    no WCS time axis (verified live: ``axisLabels="lat long"``), so a
+    time-specific request cannot be honoured over WCS. The MSC Datamart carries
+    the full per-lead-time forecast series, but for GDSPS only — the RESPS
+    Datamart tree has no per-member files. Therefore:
+
+    * GDSPS is served from the Datamart (any forecast time), falling back to the
+      WCS latest slice if the Datamart is unavailable.
+    * RESPS is served from the WCS latest slice only; a specific ensemble member
+      never falls through to GDSPS numbers.
+
+    Network operations are injected so this orchestration is offline-testable.
+    Returns the processed subset and a human-readable source-service label.
     """
 
-    coverages, _ = wcs_coverages()
-    if coverages:
+    # GDSPS: prefer the Datamart, which is the only source with a real forecast
+    # time series. The WCS coverage is a single latest slice.
+    if model == GDSPS_MODEL:
         try:
-            coverage = find_coverage(coverages, model, variable, member)
-            data = wcs_bytes(coverage.coverage_id, bbox, valid_time)
+            files, _ = datamart_files()
+            chosen = select_datamart_file(files, variable, run, valid_time)
+            data = datamart_bytes(chosen.url)
             subset = subset_netcdf_bytes(
                 data,
                 roi=roi,
                 variable=variable,
-                valid_times=(valid_time,) if valid_time else None,
+                valid_times=(chosen.valid_time,),
             )
-            return subset, "GeoMet WCS"
-        except GDSPSDataUnavailableError:
-            # Documented fallback: WCS advertises no matching coverage.
+            return subset, "MSC Datamart"
+        except (
+            GDSPSDataUnavailableError,
+            GDSPSResponseError,
+            GDSPSRequestError,
+        ):
+            # Fall back to the WCS latest slice below.
             pass
 
-    if model != GDSPS_MODEL:
-        # No Datamart fallback for a specific RESPS ensemble member.
-        raise GDSPSDataUnavailableError(
-            f"No GeoMet WCS coverage is available for {model} "
-            f"{variable}"
-            + ("" if member is None else f" member {member:02d}")
-            + ". RESPS numerical retrieval is available through GeoMet WCS "
-            "only; the MSC Datamart has no per-member ensemble files."
-        )
-
-    files, _ = datamart_files()
-    chosen = select_datamart_file(files, variable, run, valid_time)
-    data = datamart_bytes(chosen.url)
-    subset = subset_netcdf_bytes(
-        data,
-        roi=roi,
-        variable=variable,
-        valid_times=(chosen.valid_time,),
-    )
-    return subset, "MSC Datamart"
+    # WCS latest slice — the only numerical source for a RESPS member, and the
+    # GDSPS fallback. The coverage has no time axis, so no time subset is sent.
+    coverages, _ = wcs_coverages()
+    coverage = find_coverage(coverages, model, variable, member)
+    data = wcs_bytes(coverage.coverage_id, bbox, None)
+    subset = subset_netcdf_bytes(data, roi=roi, variable=variable)
+    return subset, "GeoMet WCS (latest slice)"

@@ -191,22 +191,15 @@ ROI = {
 }
 
 
-def test_fetch_numeric_prefers_wcs(tmp_path) -> None:
-    calls: list[str] = []
-
-    def wcs_coverages():
-        return (GDSPSCoverageInfo("GDSPS.ETAS", "t", ETAS),), None
-
-    def wcs_bytes(coverage_id, bbox, time):
-        calls.append("wcs")
-        return _dataset_bytes(ETAS, tmp_path)
-
-    def datamart_files():
-        calls.append("datamart_files")
-        return (), None
+def test_fetch_numeric_gdsps_prefers_datamart(tmp_path) -> None:
+    # GDSPS has a real forecast time series only on the Datamart; the WCS
+    # coverage is a single latest slice, so the Datamart is used and WCS is
+    # never consulted for a GDSPS request that the Datamart can satisfy.
+    fetched: list[str] = []
 
     def datamart_bytes(url):
-        raise AssertionError("Datamart must not be used when WCS succeeds")
+        fetched.append(url)
+        return _dataset_bytes(ETAS, tmp_path)
 
     subset, service = gdsps_service.fetch_numeric(
         GDSPS_MODEL,
@@ -216,14 +209,16 @@ def test_fetch_numeric_prefers_wcs(tmp_path) -> None:
         ROI,
         datetime(2026, 7, 22, 1, tzinfo=timezone.utc),
         RUN_00,
-        wcs_coverages=wcs_coverages,
-        wcs_bytes=wcs_bytes,
-        datamart_files=datamart_files,
+        wcs_coverages=lambda: (_ for _ in ()).throw(
+            AssertionError("WCS must not be consulted when the Datamart succeeds")
+        ),
+        wcs_bytes=lambda *a: (_ for _ in ()).throw(AssertionError("no WCS bytes")),
+        datamart_files=lambda: ((_file(ETAS, RUN_00, 1),), None),
         datamart_bytes=datamart_bytes,
     )
-    assert service == "GeoMet WCS"
+    assert service == "MSC Datamart"
     assert subset.variable == ETAS
-    assert calls == ["wcs"]
+    assert len(fetched) == 1
 
 
 def test_fetch_numeric_resps_uses_member_coverage(tmp_path) -> None:
@@ -257,8 +252,9 @@ def test_fetch_numeric_resps_uses_member_coverage(tmp_path) -> None:
         ),
         datamart_bytes=lambda url: b"",
     )
-    assert service == "GeoMet WCS"
-    # The member-2 coverage was used, never GDSPS or member 1.
+    assert service == "GeoMet WCS (latest slice)"
+    # The member-2 coverage was used, never GDSPS or member 1, and no time
+    # subset was sent (the coverage has no time axis).
     assert used == ["RESPS_ETAS_02"]
 
 
@@ -288,22 +284,13 @@ def test_fetch_numeric_resps_has_no_datamart_fallback(tmp_path) -> None:
         )
 
 
-def test_fetch_numeric_falls_back_to_datamart(tmp_path) -> None:
-    def wcs_coverages():
-        # No ETAS coverage advertised -> find_coverage raises
-        # GDSPSDataUnavailableError, triggering the documented GDSPS fallback.
-        return (GDSPSCoverageInfo("GDSPS.SSH", "t", SSH),), None
+def test_fetch_numeric_gdsps_falls_back_to_wcs_latest(tmp_path) -> None:
+    # With nothing on the Datamart, GDSPS falls back to the WCS latest slice —
+    # and sends no time subset, because the coverage has no time axis.
+    wcs_calls: list[tuple] = []
 
     def wcs_bytes(coverage_id, bbox, time):
-        raise AssertionError("WCS bytes must not be fetched without a coverage")
-
-    def datamart_files():
-        return (_file(ETAS, RUN_00, 1),), None
-
-    fetched: list[str] = []
-
-    def datamart_bytes(url):
-        fetched.append(url)
+        wcs_calls.append((coverage_id, time))
         return _dataset_bytes(ETAS, tmp_path)
 
     subset, service = gdsps_service.fetch_numeric(
@@ -312,16 +299,21 @@ def test_fetch_numeric_falls_back_to_datamart(tmp_path) -> None:
         None,
         (-63.5, 44.2, -62.5, 44.8),
         ROI,
-        None,
+        datetime(2026, 7, 22, 1, tzinfo=timezone.utc),
         RUN_00,
-        wcs_coverages=wcs_coverages,
+        wcs_coverages=lambda: (
+            (GDSPSCoverageInfo("GDSPS_ETAS", "t", ETAS, model=GDSPS_MODEL),),
+            None,
+        ),
         wcs_bytes=wcs_bytes,
-        datamart_files=datamart_files,
-        datamart_bytes=datamart_bytes,
+        datamart_files=lambda: ((), None),  # nothing on the Datamart
+        datamart_bytes=lambda url: (_ for _ in ()).throw(
+            AssertionError("no Datamart bytes")
+        ),
     )
-    assert service == "MSC Datamart"
+    assert service == "GeoMet WCS (latest slice)"
     assert subset.variable == ETAS
-    assert len(fetched) == 1
+    assert wcs_calls == [("GDSPS_ETAS", None)]
 
 
 def test_fetch_numeric_unavailable_when_neither_source(tmp_path) -> None:

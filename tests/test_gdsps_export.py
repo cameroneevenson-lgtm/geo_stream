@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from coastal_flood_explorer.gdsps_common import ETAS, GDSPSConfigurationError, GDSPSRun
+from coastal_flood_explorer.gdsps_common import GDSPSConfigurationError, GDSPSRun
 from coastal_flood_explorer.gdsps_export import (
     CSV_MEMBER,
     GEOJSON_MEMBER,
@@ -92,6 +92,26 @@ def test_metadata_has_variable_definition_and_service() -> None:
     assert metadata["source_service"] == "MSC Datamart"
     assert "not an engineering" in metadata["variable_definition"].lower()
     assert metadata["roi_bbox_crs84"]["min_lon"] == -63.0
+    # Default model labelling is GDSPS with no ensemble member.
+    assert metadata["model"] == "GDSPS"
+    assert metadata["ensemble_member"] is None
+    assert "GDSPS" in metadata["product"]
+
+
+def test_metadata_labels_resps_model_and_member() -> None:
+    data = build_export_zip(
+        build_subset("ETAS"),
+        roi=ROI,
+        source_service="GeoMet WCS",
+        model="RESPS",
+        member=3,
+    )
+    metadata = json.loads(read_zip(data)[METADATA_MEMBER])
+    # A RESPS member export is labelled as RESPS, never GDSPS.
+    assert metadata["model"] == "RESPS"
+    assert metadata["ensemble_member"] == 3
+    assert "RESPS" in metadata["product"]
+    assert "GDSPS" not in metadata["product"]
 
 
 def test_readme_and_netcdf_are_model_neutral(tmp_path) -> None:

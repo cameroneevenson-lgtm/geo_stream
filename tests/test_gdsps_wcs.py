@@ -10,6 +10,8 @@ import pytest
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
+    GDSPS_MODEL,
+    RESPS_MODEL,
     SSH,
     GDSPSConfigurationError,
     GDSPSCoverageInfo,
@@ -19,6 +21,7 @@ from coastal_flood_explorer.gdsps_common import (
 )
 from coastal_flood_explorer.gdsps_wcs import (
     GDSPSWCSClient,
+    find_coverage,
     find_coverage_for_variable,
 )
 
@@ -98,6 +101,30 @@ def test_find_coverage_for_variable_falls_back_when_missing() -> None:
     assert find_coverage_for_variable(coverages, "etas").coverage_id == "GDSPS.ETAS"
     with pytest.raises(GDSPSDataUnavailableError):
         find_coverage_for_variable(coverages, "ssh")
+
+
+def test_find_coverage_selects_exact_model_and_member() -> None:
+    coverages = (
+        GDSPSCoverageInfo("GDSPS_ETAS", "t", ETAS, model=GDSPS_MODEL),
+        GDSPSCoverageInfo(
+            "RESPS_ETAS_01", "t", ETAS, model=RESPS_MODEL, member=1
+        ),
+        GDSPSCoverageInfo(
+            "RESPS_ETAS_02", "t", ETAS, model=RESPS_MODEL, member=2
+        ),
+    )
+    # GDSPS (no member) and each RESPS member resolve to distinct coverages.
+    assert find_coverage(coverages, GDSPS_MODEL, "etas").coverage_id == "GDSPS_ETAS"
+    assert (
+        find_coverage(coverages, RESPS_MODEL, "etas", 2).coverage_id
+        == "RESPS_ETAS_02"
+    )
+    # A member that does not exist, or the wrong variable, is unavailable —
+    # never silently resolved to GDSPS or another member.
+    with pytest.raises(GDSPSDataUnavailableError):
+        find_coverage(coverages, RESPS_MODEL, "etas", 7)
+    with pytest.raises(GDSPSDataUnavailableError):
+        find_coverage(coverages, RESPS_MODEL, "ssh", 1)
 
 
 def test_fetch_coverage_builds_subset_and_returns_bytes() -> None:

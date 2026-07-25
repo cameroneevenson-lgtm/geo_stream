@@ -113,10 +113,22 @@ and is importable without Streamlit.
   alone matched all of those (verified live) and must **not** be a discovery
   gate. Each `GDSPSLayerInfo`/`GDSPSCoverageInfo` carries `model` and a RESPS
   `member`; the sidebar picks model → variable → (RESPS) ensemble member, and
-  the overlay label names all three. RESPS numerical subset is intentionally
-  not wired (separate Datamart tree + per-member ensemble semantics); it is
-  overlay-only, and the fetch button never fetches GDSPS numbers under a RESPS
-  selection.
+  the overlay label names all three. Numerical retrieval is model- and
+  member-aware: `find_coverage(model, variable, member)` selects the exact WCS
+  coverage, so a RESPS request can never fetch GDSPS numbers. The Datamart
+  NetCDF fallback is GDSPS-only (the RESPS Datamart tree carries no per-member
+  files); for RESPS `fetch_numeric` raises instead of falling through. RESPS's
+  WCS coverage returns a generic, time-less GDAL `Band1` with no CF metadata,
+  so `_select_variable` has an unidentifiable-single-band fallback — used only
+  when the lone band names no *other* known variable — that trusts the upstream
+  coverage selection and records a warning (verified live end-to-end).
+- **The MSC Datamart is date-prefixed:** `/YYYYMMDD/WXO-DD/model_gdsps/15km/`.
+  The old flat `/model_gdsps/` path 404s. `gdsps_datamart_base_path(day)` builds
+  it; the app tries today then yesterday and keys the day-level cache by the
+  dated path so entries rotate. Model availability is ROI-filtered by each
+  layer's `EX_GeographicBoundingBox` (global GDSPS always covers any ROI; the
+  Atlantic-only RESPS is hidden for a Pacific/Arctic ROI), and model runs come
+  from the WMS `reference_time` dimension.
 - **Water-level semantics stay explicit.** `wlo` is an observation and `wlp`
   is a tide prediction. Never silently substitute one for the other, hide CHS
   QC/preliminary state, compare absolute heights from different station datums,

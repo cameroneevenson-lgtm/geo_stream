@@ -1029,7 +1029,9 @@ def _render_chs_water_levels(
 
 
 def _gdsps_fetch_numeric(
+    model: str,
     variable: str,
+    member: int | None,
     bbox: tuple[float, float, float, float],
     roi: Mapping[str, Any],
     valid_time: datetime | None,
@@ -1038,7 +1040,9 @@ def _gdsps_fetch_numeric(
     """Bind the app's cached fetchers to the pure GDSPS orchestration."""
 
     return gdsps_service.fetch_numeric(
+        model,
         variable,
+        member,
         bbox,
         roi,
         valid_time,
@@ -1217,34 +1221,31 @@ def _render_gdsps_controls(
                 "available."
             )
 
-    # The numerical subset (WCS→Datamart NetCDF) is wired for the deterministic
-    # GDSPS model only. RESPS numerical retrieval needs a separate Datamart tree
-    # and per-member ensemble handling, so it is intentionally not offered here
-    # rather than silently fetching GDSPS numbers under a RESPS selection.
-    if model == GDSPS_MODEL:
-        fetch = st.button(
-            "Fetch GDSPS numerical subset",
-            type="primary",
-            disabled=bbox is None or active_roi is None,
-            width="stretch",
-            help=(
-                "Draw a region first."
-                if bbox is None
-                else "Retrieve only the drawn region and selected time."
-            ),
-        )
-        if fetch and active_roi is not None:
-            _run_gdsps_fetch(variable, bbox, active_roi, valid_time, run)
-        _render_gdsps_download(active_roi)
-    else:
-        st.caption(
-            "RESPS is available here as a map overlay. A downloadable numerical "
-            "subset is currently provided for GDSPS only."
-        )
+    # The numerical subset is retrieved via GeoMet WCS for both models (per
+    # ensemble member for RESPS); the MSC Datamart NetCDF fallback applies to
+    # the deterministic GDSPS only. A RESPS request can never fall through to
+    # GDSPS numbers — the coverage is selected by model and member.
+    member_text = "" if member is None else f" member {member:02d}"
+    fetch = st.button(
+        f"Fetch {model}{member_text} numerical subset",
+        type="primary",
+        disabled=bbox is None or active_roi is None,
+        width="stretch",
+        help=(
+            "Draw a region first."
+            if bbox is None
+            else "Retrieve only the drawn region and selected time."
+        ),
+    )
+    if fetch and active_roi is not None:
+        _run_gdsps_fetch(model, variable, member, bbox, active_roi, valid_time, run)
+    _render_gdsps_download(active_roi)
 
 
 def _run_gdsps_fetch(
+    model: str,
     variable: str,
+    member: int | None,
     bbox: tuple[float, float, float, float] | None,
     active_roi: Mapping[str, Any],
     valid_time: datetime | None,
@@ -1252,15 +1253,19 @@ def _run_gdsps_fetch(
 ) -> None:
     if bbox is None:
         return
+    member_text = "" if member is None else f" member {member:02d}"
+    label = f"{model}{member_text} {variable}"
     status = st.status(
-        "Fetching GDSPS numerical subset…",
+        f"Fetching {label} numerical subset…",
         expanded=False,
         state="running",
     )
     try:
         with status:
             subset, service = _gdsps_fetch_numeric(
+                model,
                 variable,
+                member,
                 bbox,
                 active_roi,
                 valid_time,
@@ -1271,15 +1276,18 @@ def _run_gdsps_fetch(
                 roi=active_roi,
                 source_service=service,
                 run=run,
+                model=model,
+                member=member,
             )
         stamp = (
             valid_time.strftime("%Y%m%dT%H%M%SZ")
             if valid_time is not None
             else "latest"
         )
+        member_slug = "" if member is None else f"_m{member:02d}"
         st.session_state["gdsps_export_bytes"] = export_bytes
         st.session_state["gdsps_export_name"] = (
-            f"gdsps_{variable.lower()}_{stamp}.zip"
+            f"{model.lower()}{member_slug}_{variable.lower()}_{stamp}.zip"
         )
         st.session_state["gdsps_source_service"] = service
         st.session_state["gdsps_fetch_roi"] = copy.deepcopy(dict(active_roi))
@@ -1295,9 +1303,7 @@ def _run_gdsps_fetch(
             "warnings": list(subset.warnings),
         }
         status.update(
-            label=(
-                f"GDSPS {variable} subset loaded from {service}"
-            ),
+            label=f"{label} subset loaded from {service}",
             state="complete",
             expanded=False,
         )

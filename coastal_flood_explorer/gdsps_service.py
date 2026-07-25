@@ -25,7 +25,7 @@ from .gdsps_common import (
     bbox_intersects,
 )
 from .gdsps_processing import GDSPSSubset, subset_netcdf_bytes
-from .gdsps_wcs import find_coverage_for_variable
+from .gdsps_wcs import find_coverage
 
 # Injected network operations (all ROI/bbox subsetting stays server- or
 # client-side; masking happens in gdsps_processing, never here).
@@ -230,7 +230,9 @@ def select_datamart_file(
 
 
 def fetch_numeric(
+    model: str,
     variable: str,
+    member: int | None,
     bbox: tuple[float, float, float, float],
     roi: Mapping[str, Any],
     valid_time: datetime | None,
@@ -241,16 +243,20 @@ def fetch_numeric(
     datamart_files: FileDiscovery,
     datamart_bytes: FileFetch,
 ) -> tuple[GDSPSSubset, str]:
-    """Fetch a ROI-masked subset, preferring WCS then Datamart NetCDF.
+    """Fetch a ROI-masked subset for one model/variable/member.
 
-    Network operations are injected so this orchestration is offline-testable.
-    Returns the processed subset and a human-readable source-service label.
+    WCS is preferred (it serves both models and every RESPS ensemble member);
+    the MSC Datamart NetCDF fallback exists for the deterministic GDSPS only,
+    because the RESPS Datamart tree carries no per-member files. A RESPS request
+    can therefore never fall through to GDSPS numbers. Network operations are
+    injected so this orchestration is offline-testable. Returns the processed
+    subset and a human-readable source-service label.
     """
 
     coverages, _ = wcs_coverages()
     if coverages:
         try:
-            coverage = find_coverage_for_variable(coverages, variable)
+            coverage = find_coverage(coverages, model, variable, member)
             data = wcs_bytes(coverage.coverage_id, bbox, valid_time)
             subset = subset_netcdf_bytes(
                 data,
@@ -260,8 +266,18 @@ def fetch_numeric(
             )
             return subset, "GeoMet WCS"
         except GDSPSDataUnavailableError:
-            # Documented fallback: WCS advertises no coverage for this variable.
+            # Documented fallback: WCS advertises no matching coverage.
             pass
+
+    if model != GDSPS_MODEL:
+        # No Datamart fallback for a specific RESPS ensemble member.
+        raise GDSPSDataUnavailableError(
+            f"No GeoMet WCS coverage is available for {model} "
+            f"{variable}"
+            + ("" if member is None else f" member {member:02d}")
+            + ". RESPS numerical retrieval is available through GeoMet WCS "
+            "only; the MSC Datamart has no per-member ensemble files."
+        )
 
     files, _ = datamart_files()
     chosen = select_datamart_file(files, variable, run, valid_time)

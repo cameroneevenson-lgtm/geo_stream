@@ -168,8 +168,10 @@ def find_coverage_for_variable(
     coverages: tuple[GDSPSCoverageInfo, ...],
     variable: str,
 ) -> GDSPSCoverageInfo:
-    """Return the discovered coverage for a variable, or raise unavailable.
+    """Return the first discovered coverage for a variable, or raise unavailable.
 
+    Retained for model-unaware GDSPS callers; new code should prefer
+    :func:`find_coverage`, which also distinguishes RESPS ensemble members.
     Raising :class:`GDSPSDataUnavailableError` here is the documented trigger
     for the Datamart fallback.
     """
@@ -185,6 +187,40 @@ def find_coverage_for_variable(
     raise GDSPSDataUnavailableError(
         f"GeoMet WCS does not advertise a {target} coverage for GDSPS. Use the "
         "Datamart NetCDF source instead."
+    )
+
+
+def find_coverage(
+    coverages: tuple[GDSPSCoverageInfo, ...],
+    model: str,
+    variable: str,
+    member: int | None = None,
+) -> GDSPSCoverageInfo:
+    """Return the coverage for an exact model/variable/member, or raise.
+
+    Selecting on ``model`` and ``member`` keeps GDSPS distinct from a specific
+    RESPS ensemble member, so a RESPS request can never fetch GDSPS numbers.
+    Raising :class:`GDSPSDataUnavailableError` is the documented signal that no
+    matching numerical coverage exists.
+    """
+
+    target = normalize_variable(variable)
+    if target is None:
+        raise GDSPSConfigurationError(
+            "A storm-surge variable (ETAS or SSH) is required for coverage "
+            "lookup."
+        )
+    for coverage in coverages:
+        if (
+            coverage.model == model
+            and coverage.variable == target
+            and coverage.member == member
+        ):
+            return coverage
+    member_text = "" if member is None else f" member {member:02d}"
+    raise GDSPSDataUnavailableError(
+        f"GeoMet WCS does not advertise a {target} coverage for {model}"
+        f"{member_text}."
     )
 
 

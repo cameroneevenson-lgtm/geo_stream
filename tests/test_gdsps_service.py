@@ -209,7 +209,9 @@ def test_fetch_numeric_prefers_wcs(tmp_path) -> None:
         raise AssertionError("Datamart must not be used when WCS succeeds")
 
     subset, service = gdsps_service.fetch_numeric(
+        GDSPS_MODEL,
         ETAS,
+        None,
         (-63.5, 44.2, -62.5, 44.8),
         ROI,
         datetime(2026, 7, 22, 1, tzinfo=timezone.utc),
@@ -224,10 +226,72 @@ def test_fetch_numeric_prefers_wcs(tmp_path) -> None:
     assert calls == ["wcs"]
 
 
+def test_fetch_numeric_resps_uses_member_coverage(tmp_path) -> None:
+    coverages = (
+        GDSPSCoverageInfo("GDSPS_ETAS", "t", ETAS, model=GDSPS_MODEL),
+        GDSPSCoverageInfo(
+            "RESPS_ETAS_01", "t", ETAS, model=RESPS_MODEL, member=1
+        ),
+        GDSPSCoverageInfo(
+            "RESPS_ETAS_02", "t", ETAS, model=RESPS_MODEL, member=2
+        ),
+    )
+    used: list[str] = []
+
+    def wcs_bytes(coverage_id, bbox, time):
+        used.append(coverage_id)
+        return _dataset_bytes(ETAS, tmp_path)
+
+    subset, service = gdsps_service.fetch_numeric(
+        RESPS_MODEL,
+        ETAS,
+        2,
+        (-63.5, 44.2, -62.5, 44.8),
+        ROI,
+        None,
+        None,
+        wcs_coverages=lambda: (coverages, None),
+        wcs_bytes=wcs_bytes,
+        datamart_files=lambda: (_ for _ in ()).throw(
+            AssertionError("RESPS must not touch the GDSPS Datamart")
+        ),
+        datamart_bytes=lambda url: b"",
+    )
+    assert service == "GeoMet WCS"
+    # The member-2 coverage was used, never GDSPS or member 1.
+    assert used == ["RESPS_ETAS_02"]
+
+
+def test_fetch_numeric_resps_has_no_datamart_fallback(tmp_path) -> None:
+    # A RESPS member with no matching WCS coverage must raise, never fall back
+    # to GDSPS Datamart numbers.
+    coverages = (
+        GDSPSCoverageInfo(
+            "RESPS_ETAS_01", "t", ETAS, model=RESPS_MODEL, member=1
+        ),
+    )
+    with pytest.raises(GDSPSDataUnavailableError):
+        gdsps_service.fetch_numeric(
+            RESPS_MODEL,
+            ETAS,
+            5,
+            (-63.5, 44.2, -62.5, 44.8),
+            ROI,
+            None,
+            None,
+            wcs_coverages=lambda: (coverages, None),
+            wcs_bytes=lambda *a: b"",
+            datamart_files=lambda: (_ for _ in ()).throw(
+                AssertionError("RESPS must not touch the GDSPS Datamart")
+            ),
+            datamart_bytes=lambda url: b"",
+        )
+
+
 def test_fetch_numeric_falls_back_to_datamart(tmp_path) -> None:
     def wcs_coverages():
-        # No ETAS coverage advertised -> find_coverage_for_variable raises
-        # GDSPSDataUnavailableError, triggering the documented fallback.
+        # No ETAS coverage advertised -> find_coverage raises
+        # GDSPSDataUnavailableError, triggering the documented GDSPS fallback.
         return (GDSPSCoverageInfo("GDSPS.SSH", "t", SSH),), None
 
     def wcs_bytes(coverage_id, bbox, time):
@@ -243,7 +307,9 @@ def test_fetch_numeric_falls_back_to_datamart(tmp_path) -> None:
         return _dataset_bytes(ETAS, tmp_path)
 
     subset, service = gdsps_service.fetch_numeric(
+        GDSPS_MODEL,
         ETAS,
+        None,
         (-63.5, 44.2, -62.5, 44.8),
         ROI,
         None,
@@ -261,7 +327,9 @@ def test_fetch_numeric_falls_back_to_datamart(tmp_path) -> None:
 def test_fetch_numeric_unavailable_when_neither_source(tmp_path) -> None:
     with pytest.raises(GDSPSDataUnavailableError):
         gdsps_service.fetch_numeric(
+            GDSPS_MODEL,
             ETAS,
+            None,
             (-63.5, 44.2, -62.5, 44.8),
             ROI,
             None,

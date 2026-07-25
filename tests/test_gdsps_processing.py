@@ -11,7 +11,6 @@ import xarray as xr
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
-    SSH,
     GDSPSConfigurationError,
     GDSPSDataUnavailableError,
 )
@@ -110,10 +109,35 @@ def test_valid_time_selection_reduces_frames() -> None:
 
 
 def test_missing_variable_raises_unavailable() -> None:
+    # A recognized *different* variable (named ETAS) must not be substituted for
+    # the requested SSH just because it is the only band present.
     dataset = build_dataset().drop_vars("SSH")
     roi = square_roi(-63.0, 44.0, -62.0, 45.0)
     with pytest.raises(GDSPSDataUnavailableError):
         process_dataset(dataset, roi=roi, variable="SSH")
+
+
+def test_unidentifiable_single_band_is_used_with_warning() -> None:
+    # A GeoMet WCS coverage may return a generic, metadata-less band (RESPS
+    # returns a GDAL 'Band1' with no time axis). Because the coverage was
+    # selected upstream for the requested variable, the lone band is used — with
+    # a warning — and a scalar CRS variable alongside it is ignored.
+    lon = np.linspace(-65.0, -60.0, 11)
+    lat = np.linspace(43.0, 46.0, 7)
+    band = np.tile(lon[np.newaxis, :], (lat.size, 1))
+    dataset = xr.Dataset(
+        {
+            "crs": ((), 0, {"grid_mapping_name": "latitude_longitude"}),
+            "Band1": (("lat", "lon"), band, {"long_name": "GDAL Band Number 1"}),
+        },
+        coords={"lat": lat, "lon": lon},
+    )
+    roi = square_roi(-63.0, 44.0, -62.0, 45.0)
+    subset = process_dataset(dataset, roi=roi, variable="ETAS")
+    assert subset.variable == ETAS
+    assert subset.variable_name == "Band1"
+    assert len(subset.point_series) == 1
+    assert any("did not self-identify" in warning for warning in subset.warnings)
 
 
 def test_bad_variable_raises_configuration_error() -> None:

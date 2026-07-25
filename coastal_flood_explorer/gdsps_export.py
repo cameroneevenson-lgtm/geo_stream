@@ -21,6 +21,8 @@ from typing import Any
 
 from .geometry import sanitize_for_json, serialize_feature_collection
 from .gdsps_common import (
+    GDSPS_MODEL,
+    RESPS_MODEL,
     GDSPSConfigurationError,
     GDSPSRun,
     utc_text,
@@ -29,6 +31,14 @@ from .gdsps_common import (
 from .gdsps_processing import GDSPSSubset
 
 logger = logging.getLogger(__name__)
+
+MODEL_PRODUCT_NAMES = {
+    GDSPS_MODEL: "Global Deterministic Storm Surge Prediction System (GDSPS)",
+    RESPS_MODEL: (
+        "Regional Ensemble Storm Surge Prediction System (RESPS), "
+        "Atlantic North-West"
+    ),
+}
 
 NETCDF_MEMBER = "gdsps_subset.nc"
 CSV_MEMBER = "point_time_series.csv"
@@ -46,8 +56,15 @@ def build_export_zip(
     source_service: str,
     run: GDSPSRun | None = None,
     generated_at: datetime | None = None,
+    model: str = GDSPS_MODEL,
+    member: int | None = None,
 ) -> bytes:
-    """Return a model-neutral GDSPS export package as ZIP bytes."""
+    """Return a model-neutral storm-surge export package as ZIP bytes.
+
+    ``model``/``member`` label the package for the owning model (GDSPS or a
+    specific RESPS ensemble member) so an exported file is never mistaken for
+    the other model's output.
+    """
 
     if not isinstance(subset, GDSPSSubset):
         raise GDSPSConfigurationError(
@@ -66,6 +83,8 @@ def build_export_zip(
         source_service=source_service.strip(),
         run=run,
         generated=generated,
+        model=model,
+        member=member,
     )
     readme_bytes = _readme_text(subset, source_service.strip()).encode("utf-8")
 
@@ -140,6 +159,8 @@ def _metadata_bytes(
     source_service: str,
     run: GDSPSRun | None,
     generated: datetime,
+    model: str = GDSPS_MODEL,
+    member: int | None = None,
 ) -> bytes:
     time_values: list[str] = []
     if subset.time_name is not None and subset.time_name in subset.dataset.coords:
@@ -149,7 +170,9 @@ def _metadata_bytes(
             except Exception:  # noqa: BLE001 - skip an unconvertible stamp.
                 continue
     metadata = {
-        "product": "Global Deterministic Storm Surge Prediction System (GDSPS)",
+        "product": MODEL_PRODUCT_NAMES.get(model, model),
+        "model": model,
+        "ensemble_member": member,
         "provider": "Environment and Climate Change Canada (ECCC/MSC)",
         "source_service": source_service,
         "variable": subset.variable,

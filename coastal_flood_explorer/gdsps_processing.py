@@ -129,11 +129,11 @@ def process_dataset(
             "latitude coordinates."
         )
     time_name = _find_coordinate(dataset, _TIME_NAMES)
+    warnings: list[str] = []
     variable_name, data_array = _select_variable(
-        dataset, target_variable, (lon_name, lat_name)
+        dataset, target_variable, (lon_name, lat_name), warnings=warnings
     )
 
-    warnings: list[str] = []
     subset = _bbox_prefilter(
         data_array,
         lon_name=lon_name,
@@ -207,28 +207,56 @@ def _select_variable(
     dataset: Any,
     variable: str,
     coordinate_names: tuple[str, ...],
+    *,
+    warnings: list[str],
 ) -> tuple[str, Any]:
+    # Only gridded (>=2-D) data variables are candidates; this drops the scalar
+    # CRS/grid-mapping variable that GeoMet includes alongside the real field.
     data_vars = [
         str(name)
         for name in dataset.data_vars
-        if str(name) not in coordinate_names
+        if str(name) not in coordinate_names and dataset[str(name)].ndim >= 2
     ]
-    # 1) Exact code match wins.
+    # 1) Exact code match wins (GDSPS names its variable 'etas'/'ssh').
     for name in data_vars:
         if normalize_variable(name) == variable:
             return name, dataset[name]
-    # 2) Otherwise classify by name/standard_name/long_name.
+    # 2) Otherwise classify by name/standard_name/long_name/nomvar.
     for name in data_vars:
         attrs = dataset[name].attrs
         classified = classify_variable(
             name,
             str(attrs.get("standard_name", "")),
             str(attrs.get("long_name", "")),
+            str(attrs.get("nomvar", "")),
         )
         if classified == variable:
             return name, dataset[name]
+    # 3) Single-band fallback, only for an *unidentifiable* lone band. A GeoMet
+    #    WCS coverage may carry no CF variable metadata (e.g. RESPS returns a
+    #    generic GDAL 'Band1' with no time axis); that band corresponds to
+    #    exactly the variable the coverage was selected for upstream by
+    #    model/variable/member. The fallback must NOT fire when the lone band is
+    #    a recognized *different* variable, so requesting SSH from an ETAS-only
+    #    file still fails rather than silently returning ETAS.
+    if len(data_vars) == 1:
+        name = data_vars[0]
+        attrs = dataset[name].attrs
+        identified = normalize_variable(name) or classify_variable(
+            name,
+            str(attrs.get("standard_name", "")),
+            str(attrs.get("long_name", "")),
+            str(attrs.get("nomvar", "")),
+        )
+        if identified is None:
+            warnings.append(
+                f"The NetCDF did not self-identify its variable; the single "
+                f"gridded band {name!r} is treated as {variable} because the "
+                "coverage was selected for it."
+            )
+            return name, dataset[name]
     raise GDSPSDataUnavailableError(
-        f"The GDSPS dataset does not contain a {variable} variable."
+        f"The dataset does not contain a recognizable {variable} variable."
     )
 
 

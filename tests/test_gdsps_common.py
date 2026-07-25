@@ -19,6 +19,7 @@ from coastal_flood_explorer.gdsps_common import (
     GDSPSLayerInfo,
     GDSPSResponseError,
     GDSPSRun,
+    bbox_intersects,
     classify_model,
     classify_variable,
     is_gdsps_identifier,
@@ -106,6 +107,36 @@ def test_classify_model_separates_models_and_rejects_non_model(
 )
 def test_resps_member_parsing(value: str | None, expected: int | None) -> None:
     assert resps_member(value) == expected
+
+
+# GDSPS global box vs the regional RESPS Atlantic-North-West box.
+_GDSPS_BOX = (-180.0, -90.0, 180.0, 90.0)
+_RESPS_BOX = (-72.0, 42.0, -44.0, 60.0)
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "expected"),
+    [
+        # A Nova Scotia ROI overlaps both models.
+        (_RESPS_BOX, (-64.0, 44.0, -63.0, 45.0), True),
+        (_GDSPS_BOX, (-64.0, 44.0, -63.0, 45.0), True),
+        # A British Columbia ROI is outside the Atlantic RESPS box.
+        (_RESPS_BOX, (-125.0, 48.0, -123.0, 50.0), False),
+        # ...but still inside the global GDSPS box.
+        (_GDSPS_BOX, (-125.0, 48.0, -123.0, 50.0), True),
+        # A missing box is unconstrained and always overlaps.
+        (None, (-125.0, 48.0, -123.0, 50.0), True),
+        ((-64.0, 44.0, -63.0, 45.0), None, True),
+    ],
+)
+def test_bbox_intersects(
+    a: tuple[float, float, float, float] | None,
+    b: tuple[float, float, float, float] | None,
+    expected: bool,
+) -> None:
+    assert bbox_intersects(a, b) is expected
+    # Intersection is symmetric.
+    assert bbox_intersects(b, a) is expected
 
 
 def test_normalize_variable_is_case_insensitive() -> None:

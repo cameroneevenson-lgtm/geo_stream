@@ -22,6 +22,7 @@ from .gdsps_common import (
     GDSPSDatamartFile,
     GDSPSLayerInfo,
     GDSPSRun,
+    bbox_intersects,
 )
 from .gdsps_processing import GDSPSSubset, subset_netcdf_bytes
 from .gdsps_wcs import find_coverage_for_variable
@@ -52,18 +53,51 @@ def variable_options(
 def models_available(
     layers: tuple[GDSPSLayerInfo, ...],
     files: tuple[GDSPSDatamartFile, ...],
+    roi_bbox: tuple[float, float, float, float] | None = None,
 ) -> tuple[str, ...]:
     """Return the storm-surge models actually discovered, in canonical order.
 
     GDSPS and RESPS are surfaced as separate models so the UI never mixes a
     deterministic run with an ensemble member.  Datamart NetCDF files are
     GDSPS-only, so their presence implies GDSPS availability.
+
+    When ``roi_bbox`` is given, a model is offered only if at least one of its
+    layers geographically covers the ROI.  This is what stops the regional
+    RESPS (Atlantic North-West) from being offered for a Pacific or Arctic ROI
+    where its tiles would be blank; the global GDSPS always covers any ROI.
     """
 
-    present = {layer.model for layer in layers}
+    present = {
+        layer.model
+        for layer in layers
+        if roi_bbox is None or bbox_intersects(layer.bbox, roi_bbox)
+    }
     if files:
+        # The GDSPS Datamart grid is global, so it always covers the ROI.
         present.add(GDSPS_MODEL)
     return tuple(model for model in SURGE_MODELS if model in present)
+
+
+def runs_from_reference_times(
+    layers: tuple[GDSPSLayerInfo, ...],
+    model: str,
+    variable: str,
+) -> tuple[GDSPSRun, ...]:
+    """Return model runs from the WMS ``reference_time`` dimension, newest first.
+
+    GeoMet advertises each issuance as a ``reference_time``; this is a more
+    reliable run source than crawling Datamart filenames and works for both
+    GDSPS and RESPS.
+    """
+
+    reference_times: set[datetime] = set()
+    for layer in layers:
+        if layer.model == model and layer.variable == variable:
+            reference_times.update(layer.reference_times)
+    return tuple(
+        GDSPSRun(issue_time=value, cycle=f"{value.hour:02d}")
+        for value in sorted(reference_times, reverse=True)
+    )
 
 
 def variables_for_model(

@@ -168,6 +168,8 @@ class GDSPSLayerInfo:
     available_times: tuple[datetime, ...] = ()
     model: str = GDSPS_MODEL
     member: int | None = None
+    bbox: tuple[float, float, float, float] | None = None
+    reference_times: tuple[datetime, ...] = ()
 
     def metadata(self) -> dict[str, Any]:
         """Return JSON-serializable layer metadata."""
@@ -178,6 +180,8 @@ class GDSPSLayerInfo:
             "model": self.model,
             "member": self.member,
             "variable": self.variable,
+            "bbox": list(self.bbox) if self.bbox is not None else None,
+            "reference_times": [utc_text(value) for value in self.reference_times],
             "available_times": [utc_text(value) for value in self.available_times],
         }
 
@@ -268,6 +272,30 @@ def classify_model(*candidates: str | None) -> str | None:
         if _RESPS_MODEL_TOKEN.search(candidate):
             return RESPS_MODEL
     return None
+
+
+def bbox_intersects(
+    a: tuple[float, float, float, float] | None,
+    b: tuple[float, float, float, float] | None,
+) -> bool:
+    """Return whether two ``(min_lon, min_lat, max_lon, max_lat)`` boxes overlap.
+
+    A missing box (``None``) is treated as unconstrained and always overlaps, so
+    a layer that advertises no bounding box is never hidden by ROI filtering.
+    Touching edges count as overlap; the check is deliberately permissive
+    because it only gates *offering* a model, never data correctness.
+    """
+
+    if a is None or b is None:
+        return True
+    a_min_lon, a_min_lat, a_max_lon, a_max_lat = a
+    b_min_lon, b_min_lat, b_max_lon, b_max_lat = b
+    return (
+        a_min_lon <= b_max_lon
+        and b_min_lon <= a_max_lon
+        and a_min_lat <= b_max_lat
+        and b_min_lat <= a_max_lat
+    )
 
 
 def resps_member(*candidates: str | None) -> int | None:

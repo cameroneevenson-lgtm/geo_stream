@@ -194,7 +194,13 @@ def _overlay_label(layer: GDSPSLayerInfo) -> str:
 
 def _collect_layers(root: ET.Element) -> tuple[GDSPSLayerInfo, ...]:
     discovered: dict[str, GDSPSLayerInfo] = {}
-    _walk_layers(root, inherited_times=(), discovered=discovered)
+    _walk_layers(
+        root,
+        inherited_times=(),
+        inherited_reftimes=(),
+        inherited_bbox=None,
+        discovered=discovered,
+    )
     return tuple(
         sorted(discovered.values(), key=lambda item: item.name)
     )
@@ -204,20 +210,29 @@ def _walk_layers(
     element: ET.Element,
     *,
     inherited_times: tuple[datetime, ...],
+    inherited_reftimes: tuple[datetime, ...],
+    inherited_bbox: tuple[float, float, float, float] | None,
     discovered: dict[str, GDSPSLayerInfo],
 ) -> None:
     for child in element:
         if _local_name(child.tag) != "Layer":
             # Descend through non-Layer containers (e.g. <Capability>) without
-            # altering the inherited time dimension.
+            # altering the inherited dimensions or bounding box.
             _walk_layers(
                 child,
                 inherited_times=inherited_times,
+                inherited_reftimes=inherited_reftimes,
+                inherited_bbox=inherited_bbox,
                 discovered=discovered,
             )
             continue
-        own_times = _layer_time_dimension(child)
-        effective_times = own_times or inherited_times
+        # WMS layers inherit Dimension and BoundingBox from ancestors, so a
+        # child that omits them keeps the parent's values.
+        effective_times = _named_time_dimension(child, "time") or inherited_times
+        effective_reftimes = (
+            _named_time_dimension(child, "reference_time") or inherited_reftimes
+        )
+        effective_bbox = _layer_bbox(child) or inherited_bbox
         name = _child_text(child, "Name")
         title = _child_text(child, "Title") or (name or "")
         model = classify_model(name, title)
@@ -235,22 +250,56 @@ def _walk_layers(
                     available_times=effective_times,
                     model=model,
                     member=member,
+                    bbox=effective_bbox,
+                    reference_times=effective_reftimes,
                 )
         _walk_layers(
             child,
             inherited_times=effective_times,
+            inherited_reftimes=effective_reftimes,
+            inherited_bbox=effective_bbox,
             discovered=discovered,
         )
 
 
-def _layer_time_dimension(layer: ET.Element) -> tuple[datetime, ...]:
+def _named_time_dimension(layer: ET.Element, dimension_name: str) -> tuple[datetime, ...]:
     for child in layer:
         if _local_name(child.tag) != "Dimension":
             continue
-        if (child.get("name") or "").strip().lower() != "time":
+        if (child.get("name") or "").strip().lower() != dimension_name:
             continue
         return _parse_time_dimension(child.text or "")
     return ()
+
+
+def _layer_bbox(
+    layer: ET.Element,
+) -> tuple[float, float, float, float] | None:
+    """Return a direct-child ``EX_GeographicBoundingBox`` as a CRS84 box."""
+
+    for child in layer:
+        if _local_name(child.tag) != "EX_GeographicBoundingBox":
+            continue
+        values: dict[str, float] = {}
+        for corner in child:
+            tag = _local_name(corner.tag)
+            try:
+                values[tag] = float((corner.text or "").strip())
+            except (TypeError, ValueError):
+                return None
+        try:
+            box = (
+                values["westBoundLongitude"],
+                values["southBoundLatitude"],
+                values["eastBoundLongitude"],
+                values["northBoundLatitude"],
+            )
+        except KeyError:
+            return None
+        if box[0] >= box[2] or box[1] >= box[3]:
+            return None
+        return box
+    return None
 
 
 def _parse_time_dimension(text: str) -> tuple[datetime, ...]:

@@ -165,6 +165,37 @@ def test_discovery_separates_gdsps_and_resps_and_drops_non_data() -> None:
     assert by_name["RESPS-Atlantic-North-West_9km_StormSurge_02"].member == 2
 
 
+def test_discovery_captures_bbox_and_reference_time() -> None:
+    # A layer carrying a geographic bounding box and a reference_time dimension
+    # (the model run) alongside the valid-time dimension.
+    layer = (
+        "<Layer>"
+        "<Name>RESPS-Atlantic-North-West_9km_StormSurge_01</Name>"
+        "<Title>RESPS ... Storm surge [m] [control member]</Title>"
+        "<EX_GeographicBoundingBox>"
+        "<westBoundLongitude>-72.04</westBoundLongitude>"
+        "<eastBoundLongitude>-44.29</eastBoundLongitude>"
+        "<southBoundLatitude>41.96</southBoundLatitude>"
+        "<northBoundLatitude>60.04</northBoundLatitude>"
+        "</EX_GeographicBoundingBox>"
+        '<Dimension name="time" units="ISO8601">'
+        "2026-07-24T00:00:00Z,2026-07-24T01:00:00Z</Dimension>"
+        '<Dimension name="reference_time" units="ISO8601">'
+        "2026-07-24T00:00:00Z</Dimension>"
+        "</Layer>"
+    )
+    (found,) = GDSPSWMSClient(
+        session=FakeSession(FakeResponse(text=capabilities(layer)))
+    ).discover_layers()
+
+    assert found.bbox == (-72.04, 41.96, -44.29, 60.04)
+    assert found.reference_times == (
+        datetime(2026, 7, 24, 0, tzinfo=timezone.utc),
+    )
+    # The valid-time dimension is unaffected by reference_time parsing.
+    assert len(found.available_times) == 2
+
+
 def test_no_matching_layers_is_empty_not_error() -> None:
     document = capabilities(layer_xml("GDPS.ETA_TT", "Air temperature"))
     client = GDSPSWMSClient(session=FakeSession(FakeResponse(text=document)))

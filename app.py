@@ -1041,9 +1041,20 @@ def _render_gdsps_controls(
         st.error("GDSPS discovery failed unexpectedly.")
         return
 
-    models = gdsps_service.models_available(layers, files)
+    all_models = gdsps_service.models_available(layers, files)
+    models = gdsps_service.models_available(layers, files, roi_bbox=bbox)
     if not models:
         st.session_state["gdsps_overlay_params"] = None
+        if all_models and bbox is not None:
+            # Models exist but none cover the drawn ROI (e.g. regional RESPS
+            # with a Pacific ROI). This is expected, not an error.
+            hidden = ", ".join(all_models)
+            st.info(
+                f"No storm-surge model covers the drawn region. Available "
+                f"model(s) — {hidden} — do not include the ROI in their "
+                "forecast domain."
+            )
+            return
         message = (
             "Storm-surge content is not currently advertised by GeoMet and no "
             "Datamart NetCDF files were discovered. This is not an error — the "
@@ -1102,21 +1113,24 @@ def _render_gdsps_controls(
             )
 
     layer = gdsps_service.layer_for(layers, model, variable, member)
-    run: GDSPSRun | None = None
-    if model == GDSPS_MODEL:
+    # Prefer the WMS reference_time dimension (works for both models); fall back
+    # to dated GDSPS Datamart runs only when GeoMet advertises no reference_time.
+    runs = gdsps_service.runs_from_reference_times(layers, model, variable)
+    if not runs and model == GDSPS_MODEL:
         runs = gdsps_service.runs_from_files(files, variable)
-        if runs:
-            run = st.selectbox(
-                "Model run",
-                runs,
-                format_func=lambda item: item.label,
-                key="gdsps_selected_run",
-            )
-        else:
-            st.caption(
-                "No dated Datamart runs were discovered; using the current "
-                "GeoMet layer state."
-            )
+    run: GDSPSRun | None = None
+    if runs:
+        run = st.selectbox(
+            "Model run",
+            runs,
+            format_func=lambda item: item.label,
+            key="gdsps_selected_run",
+        )
+    else:
+        st.caption(
+            "No dated model runs were advertised; using the current GeoMet "
+            "layer state."
+        )
 
     valid_times = gdsps_service.valid_times(layer, files, variable, run)
     valid_time: datetime | None = None

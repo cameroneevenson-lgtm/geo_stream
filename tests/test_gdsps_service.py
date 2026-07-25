@@ -85,6 +85,57 @@ def test_model_scoped_selection_keeps_gdsps_and_resps_separate() -> None:
     assert gdsps_service.layer_for(layers, RESPS_MODEL, SSH, 1) is None
 
 
+_GLOBAL = (-180.0, -90.0, 180.0, 90.0)
+_ATLANTIC = (-72.0, 42.0, -44.0, 60.0)
+
+
+def test_models_available_filters_by_roi_bbox() -> None:
+    layers = (
+        GDSPSLayerInfo("GDSPS_ETAS", "t", ETAS, model=GDSPS_MODEL, bbox=_GLOBAL),
+        GDSPSLayerInfo(
+            "RESPS_ETAS_01", "t", ETAS, model=RESPS_MODEL, member=1, bbox=_ATLANTIC
+        ),
+    )
+    nova_scotia = (-64.0, 44.0, -63.0, 45.0)
+    british_columbia = (-125.0, 48.0, -123.0, 50.0)
+
+    # No ROI: both models offered.
+    assert gdsps_service.models_available(layers, ()) == (GDSPS_MODEL, RESPS_MODEL)
+    # Atlantic ROI: both cover it.
+    assert gdsps_service.models_available(layers, (), nova_scotia) == (
+        GDSPS_MODEL,
+        RESPS_MODEL,
+    )
+    # Pacific ROI: only the global GDSPS is offered; regional RESPS is hidden.
+    assert gdsps_service.models_available(layers, (), british_columbia) == (
+        GDSPS_MODEL,
+    )
+    # Datamart files keep GDSPS available regardless of ROI (global grid).
+    files = (_file(ETAS, RUN_00, 3),)
+    assert gdsps_service.models_available((), files, british_columbia) == (
+        GDSPS_MODEL,
+    )
+
+
+def test_runs_from_reference_times_newest_first() -> None:
+    ref_a = datetime(2026, 7, 24, 0, tzinfo=timezone.utc)
+    ref_b = datetime(2026, 7, 24, 12, tzinfo=timezone.utc)
+    layers = (
+        GDSPSLayerInfo(
+            "RESPS_ETAS_01", "t", ETAS, model=RESPS_MODEL, member=1,
+            reference_times=(ref_a, ref_b),
+        ),
+        GDSPSLayerInfo(
+            "GDSPS_ETAS", "t", ETAS, model=GDSPS_MODEL, reference_times=(ref_a,)
+        ),
+    )
+    runs = gdsps_service.runs_from_reference_times(layers, RESPS_MODEL, ETAS)
+    assert [run.issue_time for run in runs] == [ref_b, ref_a]
+    assert [run.cycle for run in runs] == ["12", "00"]
+    # A model/variable with no reference_time yields no runs.
+    assert gdsps_service.runs_from_reference_times(layers, RESPS_MODEL, SSH) == ()
+
+
 def test_runs_from_files_newest_first() -> None:
     files = (_file(ETAS, RUN_00, 3), _file(ETAS, RUN_12, 3), _file(SSH, RUN_12, 3))
     runs = gdsps_service.runs_from_files(files, ETAS)

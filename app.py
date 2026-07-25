@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import Mapping
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -72,13 +72,14 @@ from coastal_flood_explorer.geometry import (
     roi_bbox,
 )
 from coastal_flood_explorer.gdsps_common import (
-    GDSPS_DATAMART_PATH,
     GDSPS_DATAMART_ROOT,
+    GDSPS_DATAMART_SUBPATH,
     GDSPS_MODEL,
     MODEL_DEFINITIONS,
     RESPS_MODEL,
     GDSPSError,
     GDSPSRun,
+    gdsps_datamart_base_path,
 )
 from coastal_flood_explorer import gdsps_service
 from coastal_flood_explorer.gdsps_datamart import GDSPSDatamartClient
@@ -266,6 +267,59 @@ def _cached_gdsps_datamart_bytes(
 
     client = GDSPSDatamartClient(root=root, base_path=base_path)
     return client.download(url)
+
+
+def _gdsps_datamart_base_paths() -> tuple[str, ...]:
+    """Return today's and yesterday's date-prefixed GDSPS Datamart base paths.
+
+    The MSC Datamart is organized under /YYYYMMDD/WXO-DD/…; the current UTC
+    day's run may not be published yet early in the day, so yesterday is a
+    fallback. Newest first. The date is part of each cache key, so entries
+    rotate naturally as the day advances.
+    """
+
+    today = datetime.now(timezone.utc).date()
+    return tuple(
+        gdsps_datamart_base_path(today - timedelta(days=offset))
+        for offset in (0, 1)
+    )
+
+
+def _discover_gdsps_datamart_files() -> tuple[tuple[Any, ...], str | None]:
+    """Merge GDSPS Datamart discovery across the candidate dates.
+
+    A per-date failure (e.g. today's run not published yet) is tolerated as
+    long as another date yields files; an error is only surfaced when nothing
+    was discovered at all.
+    """
+
+    merged: dict[str, Any] = {}
+    last_error: str | None = None
+    for base_path in _gdsps_datamart_base_paths():
+        files, error = _cached_gdsps_datamart_files(GDSPS_DATAMART_ROOT, base_path)
+        for discovered in files:
+            merged[discovered.url] = discovered
+        if error:
+            last_error = error
+    return tuple(merged.values()), (None if merged else last_error)
+
+
+def _gdsps_datamart_base_path_for_url(url: str) -> str:
+    """Return the date-prefixed base path that contains a Datamart file URL.
+
+    The download primitive validates that a URL sits within its base path, so a
+    file discovered under one date must be fetched with that same date's base
+    path rather than today's.
+    """
+
+    marker = f"/{GDSPS_DATAMART_SUBPATH}"
+    index = url.find(marker)
+    if index != -1:
+        path_start = url.find("/", url.find("://") + 3)
+        if path_start != -1:
+            return url[path_start : index + len(marker)]
+    # Fall back to today's path; the download guard will reject a mismatch.
+    return _gdsps_datamart_base_paths()[0]
 
 
 def _initialize_state() -> None:
@@ -993,11 +1047,9 @@ def _gdsps_fetch_numeric(
         wcs_bytes=lambda coverage_id, box, time: _cached_gdsps_wcs_bytes(
             GEOMET_WMS_URL, coverage_id, box, time
         ),
-        datamart_files=lambda: _cached_gdsps_datamart_files(
-            GDSPS_DATAMART_ROOT, GDSPS_DATAMART_PATH
-        ),
+        datamart_files=_discover_gdsps_datamart_files,
         datamart_bytes=lambda url: _cached_gdsps_datamart_bytes(
-            GDSPS_DATAMART_ROOT, GDSPS_DATAMART_PATH, url
+            GDSPS_DATAMART_ROOT, _gdsps_datamart_base_path_for_url(url), url
         ),
     )
 
@@ -1031,10 +1083,7 @@ def _render_gdsps_controls(
 
     try:
         layers, layers_error = _cached_gdsps_wms_layers(GEOMET_WMS_URL)
-        files, files_error = _cached_gdsps_datamart_files(
-            GDSPS_DATAMART_ROOT,
-            GDSPS_DATAMART_PATH,
-        )
+        files, files_error = _discover_gdsps_datamart_files()
     except Exception:
         LOGGER.exception("Unexpected GDSPS discovery failure")
         st.session_state["gdsps_overlay_params"] = None

@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from .api import ECCCError
@@ -25,7 +25,20 @@ from .api import ECCCError
 # and from the same Datamart host already used by the Coastal Flooding archive.
 GEOMET_ENDPOINT = "https://geo.weather.gc.ca/geomet"
 GDSPS_DATAMART_ROOT = "https://dd.weather.gc.ca"
-GDSPS_DATAMART_PATH = "/model_gdsps/"
+# The MSC Datamart is organized under /YYYYMMDD/WXO-DD/<model>/...; GDSPS lives
+# at model_gdsps/15km/{00,12}/. The old flat /model_gdsps/ path is gone, so the
+# base path is built per date. `GDSPS_DATAMART_PATH` is kept only as the
+# date-less subpath suffix for building and recognizing GDSPS Datamart URLs.
+GDSPS_DATAMART_SUBPATH = "WXO-DD/model_gdsps/15km/"
+GDSPS_DATAMART_PATH = f"/{GDSPS_DATAMART_SUBPATH}"
+
+
+def gdsps_datamart_base_path(day: date) -> str:
+    """Return the date-prefixed GDSPS Datamart base path for a UTC day."""
+
+    if not isinstance(day, date):
+        raise GDSPSConfigurationError("A date is required for the Datamart path.")
+    return f"/{day:%Y%m%d}/{GDSPS_DATAMART_SUBPATH}"
 
 # Two distinct ECCC/MSC storm-surge *models* share the same GeoMet endpoint and
 # both use "storm surge" phrasing, so they must be told apart by their model

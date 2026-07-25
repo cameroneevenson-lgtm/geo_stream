@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import pytest
@@ -16,11 +15,13 @@ from coastal_flood_explorer.gdsps_common import (
     GDSPSRequestError,
     GDSPSResponseError,
     GDSPSRun,
+    gdsps_datamart_base_path,
 )
 from coastal_flood_explorer.gdsps_datamart import GDSPSDatamartClient
 
 ROOT = "https://dd.weather.gc.ca"
-BASE = "/model_gdsps/"
+# The MSC Datamart's date-prefixed layout: /YYYYMMDD/WXO-DD/model_gdsps/15km/.
+BASE = "/20260722/WXO-DD/model_gdsps/15km/"
 
 
 def directory_html(*hrefs: str) -> str:
@@ -88,7 +89,7 @@ def test_crawls_tree_and_parses_files() -> None:
         f"{ROOT}{BASE}12/",
         FakeResponse(text=directory_html(etas_name("20260722T12Z"))),
     )
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     files = client.discover_files()
 
     names = [file.filename for file in files]
@@ -112,7 +113,7 @@ def test_variable_filter_limits_results() -> None:
         f"{ROOT}{BASE}",
         FakeResponse(text=directory_html(etas_name(), ssh_name())),
     )
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     ssh_files = client.discover_files(variable="ssh")
     assert [f.variable for f in ssh_files] == [SSH]
 
@@ -129,7 +130,7 @@ def test_list_runs_deduplicates_and_sorts() -> None:
             )
         ),
     )
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     runs = client.list_runs()
     assert [run.stamp for run in runs] == ["20260722T12Z", "20260722T00Z"]
 
@@ -145,7 +146,7 @@ def test_cross_origin_href_is_ignored() -> None:
             )
         ),
     )
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     files = client.discover_files()
     assert [f.filename for f in files] == [etas_name()]
     # The evil host was never requested.
@@ -159,7 +160,7 @@ def test_fetch_file_returns_bytes() -> None:
         url,
         FakeResponse(content=b"CDF\x01data", content_type="application/x-netcdf"),
     )
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     file = GDSPSDatamartFile(
         filename=etas_name(),
         url=url,
@@ -175,7 +176,7 @@ def test_fetch_file_rejects_html_body() -> None:
     session = FakeSession()
     url = f"{ROOT}{BASE}00/{etas_name()}"
     session.route(url, FakeResponse(text="<html>404</html>"))
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     file = GDSPSDatamartFile(
         filename=etas_name(),
         url=url,
@@ -191,7 +192,7 @@ def test_fetch_file_rejects_html_body() -> None:
 def test_http_error_raises_request_error() -> None:
     session = FakeSession()
     session.route(f"{ROOT}{BASE}", FakeResponse(status_code=503))
-    client = GDSPSDatamartClient(session=session)
+    client = GDSPSDatamartClient(session=session, base_path=BASE)
     with pytest.raises(GDSPSRequestError):
         client.discover_files()
 
@@ -199,3 +200,14 @@ def test_http_error_raises_request_error() -> None:
 def test_insecure_root_rejected() -> None:
     with pytest.raises(GDSPSConfigurationError):
         GDSPSDatamartClient(root="http://dd.weather.gc.ca")
+
+
+def test_datamart_base_path_is_date_prefixed() -> None:
+    # The live Datamart moved to /YYYYMMDD/WXO-DD/model_gdsps/15km/; the flat
+    # /model_gdsps/ path is gone.
+    assert (
+        gdsps_datamart_base_path(date(2026, 7, 24))
+        == "/20260724/WXO-DD/model_gdsps/15km/"
+    )
+    with pytest.raises(GDSPSConfigurationError):
+        gdsps_datamart_base_path("20260724")  # type: ignore[arg-type]

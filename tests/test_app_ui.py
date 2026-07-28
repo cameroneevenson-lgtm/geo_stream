@@ -618,6 +618,19 @@ def test_initial_render_explains_archive_without_fetching() -> None:
     assert any("does not contact ECCC" in value for value in captions)
 
 
+def test_initial_render_links_to_public_repository() -> None:
+    app = AppTest.from_string(
+        _app_with_fake_chs(),
+        default_timeout=20,
+    ).run()
+
+    assert not list(app.exception)
+    assert any(
+        "https://github.com/cameroneevenson-lgtm/geo_stream" in element.value
+        for element in app.markdown
+    )
+
+
 def test_map_has_space_below_it_for_viewport_centering() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),

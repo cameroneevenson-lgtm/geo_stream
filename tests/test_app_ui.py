@@ -631,6 +631,100 @@ def test_initial_render_links_to_public_repository() -> None:
     )
 
 
+def test_sidebar_exposes_complete_feedback_form() -> None:
+    app = AppTest.from_string(
+        _app_with_fake_chs(),
+        default_timeout=20,
+    ).run()
+
+    assert not list(app.exception)
+    assert any(
+        expander.label == "Feedback / Report a Bug"
+        for expander in app.expander
+    )
+    assert any(
+        selectbox.label == "Report type" for selectbox in app.selectbox
+    )
+    assert any(
+        text_input.label == "Short title" for text_input in app.text_input
+    )
+    assert any(
+        text_area.label == "Detailed comment" for text_area in app.text_area
+    )
+    assert any(
+        text_input.label == "Name or contact (optional)"
+        for text_input in app.text_input
+    )
+    assert any(
+        checkbox.label == "Include the current app state"
+        for checkbox in app.checkbox
+    )
+    assert any(button.label == "Submit feedback" for button in app.button)
+
+
+def test_feedback_submission_shows_issue_link_and_deduplicates() -> None:
+    script = """
+import streamlit as st
+import app as app_module
+from coastal_flood_explorer.feedback import CreatedIssue, GitHubConfig
+
+app_module.github_config_from_secrets = lambda secrets: GitHubConfig(
+    token="test-token",
+    owner="example-owner",
+    repo="geo-stream",
+)
+
+def fake_create(config, *, title, body, label):
+    st.session_state["feedback_api_calls"] = (
+        int(st.session_state.get("feedback_api_calls", 0)) + 1
+    )
+    st.session_state["captured_feedback_title"] = title
+    st.session_state["captured_feedback_body"] = body
+    st.session_state["captured_feedback_label"] = label
+    return CreatedIssue(
+        number=91,
+        url="https://github.com/example-owner/geo-stream/issues/91",
+        label_applied=True,
+    )
+
+app_module.create_github_issue = fake_create
+app_module._initialize_state()
+with st.sidebar:
+    app_module._render_feedback_form()
+"""
+    app = AppTest.from_string(script, default_timeout=20).run()
+    next(
+        field for field in app.text_input if field.label == "Short title"
+    ).set_value("Map layer disappears")
+    next(
+        field for field in app.text_area if field.label == "Detailed comment"
+    ).set_value("The layer disappears after I change the forecast time.")
+
+    next(
+        button for button in app.button if button.label == "Submit feedback"
+    ).click().run()
+
+    assert not list(app.exception)
+    assert app.session_state["feedback_api_calls"] == 1
+    assert app.session_state["captured_feedback_title"] == (
+        "[Bug] Map layer disappears"
+    )
+    assert app.session_state["captured_feedback_label"] == "bug"
+    assert "## Report context" in app.session_state["captured_feedback_body"]
+    assert any(
+        "[#91](https://github.com/example-owner/geo-stream/issues/91)"
+        in success.value
+        for success in app.success
+    )
+
+    next(
+        button for button in app.button if button.label == "Submit feedback"
+    ).click().run()
+
+    assert not list(app.exception)
+    assert app.session_state["feedback_api_calls"] == 1
+
+
 def test_map_has_space_below_it_for_viewport_centering() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),

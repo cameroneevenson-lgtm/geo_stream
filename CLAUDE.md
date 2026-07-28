@@ -56,6 +56,7 @@ and is importable without Streamlit.
 | `geometry.py` | Shapely: ROI parsing/repair, exact station-point ranking, bbox extraction, per-feature clipping. All GEOS contact is here. |
 | `properties.py` | Reading ECCC's dotted property paths, normalizing risk/contributors/datetimes, the DataFrame, the GeoJSON export. |
 | `filtering.py` | Pure `FilterCriteria` matching + `summarize_features`. No I/O, no Streamlit. |
+| `feedback.py` | Safe session-state sanitization, version/deployment context, Markdown report generation, and the hardened GitHub Issue client. The sidebar form remains in `app.py`; GitHub calls are mocked in tests. |
 | `map_view.py` | Folium map, `Draw` toolbar, drawing rehydration, result layer, escaped popups/tooltips, legend, synthetic banner. |
 | `state.py` | `reconcile_drawings` — validates the raw `all_drawings` payload from streamlit-folium into a `DrawingState`. |
 | `synthetic.py` | Locally generated, loudly labelled fake features for UI work when an archive range is empty. |

@@ -209,6 +209,65 @@ Windows launchers:
 Both use `C:\Tools\.venv` and always bind to loopback at
 `127.0.0.1:8501`. `GEO_STREAM_PORT` can select another local port.
 
+## Feedback and bug reports
+
+The shared sidebar includes **Feedback / Report a Bug** on every app render.
+Users can submit a bug, suggestion, or general-feedback report without leaving
+the app. A successful submission displays the new GitHub Issue number and a
+direct link to it. The app does not store reports in a separate database.
+
+Issue creation uses the GitHub REST API and reads all credentials and repository
+coordinates from Streamlit secrets. Create a fine-grained GitHub personal
+access token scoped only to this repository, with repository **Issues: Read and
+write** permission. GitHub grants the required metadata read access
+automatically. No contents, administration, or organization permission is
+needed. Avoid a classic token with the broader `repo` scope when a fine-grained
+token is available.
+
+For local development, create `.streamlit/secrets.toml` with placeholder values
+replaced locally:
+
+```toml
+[github]
+token = "github_pat_REPLACE_WITH_LOCAL_TOKEN"
+owner = "cameroneevenson-lgtm"
+repo = "geo_stream"
+```
+
+`.streamlit/secrets.toml` is gitignored and must never be committed. Restart
+Streamlit after changing it. In Streamlit Community Cloud, open the deployed
+app's settings, choose **Secrets**, paste the same TOML configuration, save it,
+and reboot the app if Streamlit does not do so automatically. Do not place the
+token in source code, a committed configuration file, or a URL query parameter.
+
+Report types request these existing repository labels:
+
+- **Bug** → `bug`
+- **Suggestion** → `enhancement`
+- **General feedback** → `feedback`
+
+If the chosen label does not exist or cannot be applied, Geo Stream retries the
+issue creation without a label, so a useful report is not lost. Repository
+maintainers can create those three labels in advance to keep triage automatic.
+
+Every issue records the report type, UTC submission time, current app page,
+sanitized URL query parameters, app version or Git commit, deployment
+environment, and a generated report ID. The version resolver prefers a commit
+SHA supplied by the deployment, then common hosted-deployment commit variables,
+then local Git metadata. It safely reports `unknown` when none is available.
+Deployments can set `GEO_STREAM_COMMIT_SHA` and
+`GEO_STREAM_DEPLOYMENT_ENV` explicitly when Git metadata or the public app URL
+does not identify them.
+
+The app-state snapshot is opt-in: it is included only when the user checks
+**Include the current app state**. Before submission, Geo Stream removes keys
+whose names suggest tokens, secrets, passwords, credentials, authorization
+headers, cookies, OAuth data, or API keys. It also omits Streamlit secrets,
+feedback-form values, uploaded-file contents, binary values, and unsupported
+object contents. Remaining values are converted to JSON-safe forms, individual
+collections and strings are bounded, and the complete snapshot has a hard size
+limit with truncation metadata.
+
 ## Temporary Cloudflare tunnel
 
 First start and verify the local application. Then run:
@@ -250,6 +309,13 @@ python -m pytest
 ```
 
 Tests mock all HTTP activity and never depend on CHS or ECCC availability.
+The feedback tests also mock every GitHub request and never create real issues.
+
+To run only the feedback tests:
+
+```text
+python -m pytest tests/test_feedback.py
+```
 
 For an additional syntax check:
 

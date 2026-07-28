@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
 import streamlit as st
 from streamlit_folium import st_folium
@@ -64,6 +68,18 @@ from coastal_flood_explorer.filtering import (
     filter_features,
     forecast_period_options,
     summarize_features,
+)
+from coastal_flood_explorer.feedback import (
+    REPORT_LABELS,
+    FeedbackError,
+    build_issue_body,
+    create_github_issue,
+    format_issue_title,
+    get_app_version,
+    get_current_page_context,
+    get_deployment_environment,
+    github_config_from_secrets,
+    sanitize_session_state,
 )
 from coastal_flood_explorer.geometry import (
     GeometryError,
@@ -151,6 +167,9 @@ STATE_DEFAULTS: dict[str, Any] = {
     "gdsps_fetch_roi": None,
     "gdsps_point_series": None,
     "gdsps_subset_summary": None,
+    "feedback_submission_in_progress": False,
+    "feedback_last_submission_fingerprint": None,
+    "feedback_last_success": None,
 }
 
 
@@ -1382,12 +1401,174 @@ def _render_gdsps_results() -> None:
         st.caption(f"Note: {warning}")
 
 
+def _render_feedback_form() -> None:
+    """Render the repository-backed feedback form in the shared sidebar."""
+
+    with st.expander("Feedback / Report a Bug", expanded=False):
+        st.caption(
+            "Send a bug report, suggestion, or other feedback directly to "
+            "the Geo Stream GitHub repository."
+        )
+        in_progress = bool(
+            st.session_state.get("feedback_submission_in_progress")
+        )
+        with st.form("feedback-report-form", clear_on_submit=False):
+            report_type = st.selectbox(
+                "Report type",
+                tuple(REPORT_LABELS),
+                key="feedback_report_type",
+            )
+            short_title = st.text_input(
+                "Short title",
+                max_chars=200,
+                key="feedback_short_title",
+            )
+            comment = st.text_area(
+                "Detailed comment",
+                max_chars=5_000,
+                height=160,
+                key="feedback_comment",
+            )
+            contact = st.text_input(
+                "Name or contact (optional)",
+                max_chars=500,
+                key="feedback_contact",
+            )
+            include_state = st.checkbox(
+                "Include the current app state",
+                value=False,
+                key="feedback_include_state",
+                help=(
+                    "Includes a size-limited diagnostic snapshot. Sensitive "
+                    "keys, uploaded files, and binary values are removed."
+                ),
+            )
+            submitted = st.form_submit_button(
+                "Submit feedback",
+                type="primary",
+                disabled=in_progress,
+                width="stretch",
+            )
+
+        if in_progress:
+            st.info("A feedback report is already being submitted.")
+            return
+        if not submitted:
+            previous = st.session_state.get("feedback_last_success")
+            if isinstance(previous, Mapping):
+                number = previous.get("number")
+                url = previous.get("url")
+                if isinstance(number, int) and isinstance(url, str):
+                    st.success(
+                        f"Created GitHub Issue [#{number}]({url})."
+                    )
+            return
+        if not short_title.strip() or not comment.strip():
+            st.error("Enter both a short title and a detailed comment.")
+            return
+
+        fingerprint_source = json.dumps(
+            {
+                "report_type": report_type,
+                "short_title": short_title.strip(),
+                "comment": comment.strip(),
+                "contact": contact.strip(),
+                "include_state": include_state,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+        fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
+        previous = st.session_state.get("feedback_last_success")
+        if (
+            fingerprint
+            == st.session_state.get("feedback_last_submission_fingerprint")
+            and isinstance(previous, Mapping)
+        ):
+            number = previous.get("number")
+            url = previous.get("url")
+            if isinstance(number, int) and isinstance(url, str):
+                st.success(f"Created GitHub Issue [#{number}]({url}).")
+                return
+
+        st.session_state["feedback_submission_in_progress"] = True
+        st.session_state["feedback_last_submission_fingerprint"] = fingerprint
+        st.session_state["feedback_last_success"] = None
+        try:
+            config = github_config_from_secrets(st.secrets)
+            page_context = get_current_page_context(
+                "Geo Stream Coastal Flood Explorer",
+                dict(st.query_params),
+            )
+            snapshot = None
+            if include_state:
+                snapshot = sanitize_session_state(
+                    dict(st.session_state),
+                    excluded_prefixes=("feedback_",),
+                )
+            report_id = str(uuid4())
+            submitted_at = _utc_now()
+            try:
+                current_url = st.context.url
+            except Exception:
+                current_url = None
+            body = build_issue_body(
+                comment=comment,
+                contact=contact,
+                report_type=report_type,
+                submitted_at=submitted_at,
+                current_page=str(page_context["current_page"]),
+                query_parameters=page_context["query_parameters"],
+                app_version=get_app_version(
+                    repository_directory=Path(__file__).resolve().parent,
+                ),
+                deployment_environment=get_deployment_environment(
+                    current_url=current_url,
+                ),
+                report_id=report_id,
+                state_snapshot=snapshot,
+            )
+            with st.spinner("Submitting feedback to GitHub…"):
+                issue = create_github_issue(
+                    config,
+                    title=format_issue_title(report_type, short_title),
+                    body=body,
+                    label=REPORT_LABELS[report_type],
+                )
+            st.session_state["feedback_last_success"] = {
+                "number": issue.number,
+                "url": issue.url,
+            }
+            st.success(
+                f"Created GitHub Issue [#{issue.number}]({issue.url})."
+            )
+            if not issue.label_applied:
+                st.caption(
+                    "The issue was created without a label because the "
+                    "configured repository did not accept that label."
+                )
+        except FeedbackError as exc:
+            st.session_state["feedback_last_submission_fingerprint"] = None
+            st.error(str(exc))
+        except Exception:
+            st.session_state["feedback_last_submission_fingerprint"] = None
+            LOGGER.exception("Unexpected feedback submission failure")
+            st.error(
+                "The feedback report could not be submitted. Please try "
+                "again later."
+            )
+        finally:
+            st.session_state["feedback_submission_in_progress"] = False
+
+
 def _render_sidebar() -> tuple[FilterCriteria, str | None]:
     action_error: str | None = None
     bbox = _current_bbox()
     archive_window = recent_archive_window()
 
     with st.sidebar:
+        _render_feedback_form()
+        st.divider()
         st.header("ECCC forecast overlay")
         if bbox is None:
             st.info(

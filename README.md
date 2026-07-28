@@ -1,5 +1,7 @@
 # Geo Stream Coastal Flood Explorer
 
+> Disaster recovery: see [docs/RECOVERY.md](docs/RECOVERY.md) for a clean reinstall and external-service check.
+
 Geo Stream is an exploratory Streamlit application for viewing recent Canadian
 Hydrographic Service (CHS) water levels and optional Environment and Climate
 Change Canada (ECCC) Coastal Flooding Risk Index polygons. A user-drawn region

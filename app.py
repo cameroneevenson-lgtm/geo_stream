@@ -116,6 +116,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 
 LOGGER = logging.getLogger("geo_stream.app")
+REPOSITORY_URL = "https://github.com/cameroneevenson-lgtm/geo_stream"
 MAP_COMPONENT_KEY = "coastal-flood-map-v6"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
@@ -2141,6 +2142,7 @@ def main() -> None:
     _initialize_state()
 
     st.title("Geo Stream Coastal Flood Explorer")
+    st.markdown(f"[View the Geo Stream repository on GitHub]({REPOSITORY_URL})")
     st.caption(
         "Draw any Canadian region to automatically select an official CHS "
         "water-level gauge inside it, or the nearest gauge when none lies "

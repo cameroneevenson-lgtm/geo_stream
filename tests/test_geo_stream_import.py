@@ -2,8 +2,8 @@
 
 The shared venv puts ``C:\\Tools`` on ``sys.path``. With the repo at
 ``C:\\Tools\\geo_stream``, consumers should be able to import
-``geo_stream.coastal_flood_explorer.*`` and ``geo_stream.app`` without the
-repo root itself being on ``sys.path``.
+``geo_stream.coastal_flood_explorer.*``, short ``geo_stream.x`` aliases, and
+``geo_stream.app`` without the repo root itself being on ``sys.path``.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SHORT_ALIAS_SAMPLES = ("api", "chs", "geometry", "archive_dates", "gdsps_common")
 
 
 def _purge_geo_stream_modules() -> None:
@@ -93,3 +94,33 @@ def test_geo_stream_app_importable_from_tools_parent(
     app = importlib.import_module("geo_stream.app")
     assert Path(app.__file__).resolve() == REPO_ROOT / "app.py"
     assert hasattr(app, "main") or hasattr(app, "LOGGER")
+
+
+@pytest.mark.parametrize("short_name", SHORT_ALIAS_SAMPLES)
+def test_short_geo_stream_x_import_aliases_library(
+    tools_layout: Path,
+    short_name: str,
+) -> None:
+    """``import geo_stream.x`` resolves to coastal_flood_explorer.x."""
+    aliased = importlib.import_module(f"geo_stream.{short_name}")
+    nested = importlib.import_module(
+        f"geo_stream.coastal_flood_explorer.{short_name}"
+    )
+    assert aliased is nested
+    assert Path(aliased.__file__).resolve().parent == (
+        REPO_ROOT / "coastal_flood_explorer"
+    )
+
+
+def test_from_geo_stream_import_short_alias(tools_layout: Path) -> None:
+    geo_stream = importlib.import_module("geo_stream")
+    assert geo_stream.api is importlib.import_module(
+        "geo_stream.coastal_flood_explorer.api"
+    )
+
+
+def test_short_alias_does_not_shadow_real_app_module(
+    tools_layout: Path,
+) -> None:
+    app = importlib.import_module("geo_stream.app")
+    assert Path(app.__file__).resolve() == REPO_ROOT / "app.py"

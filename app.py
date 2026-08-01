@@ -125,16 +125,15 @@ from coastal_flood_explorer.map_view import (
     risk_legend_html,
 )
 
-# CaSR v3.2 (PAVICS) is optional at import time so a Cloud-only import failure
-# cannot blank the whole map. The real exception text is kept for the sidebar
-# (Streamlit Cloud redacts it from the main crash screen).
+# CaSR v3.2 (native HPFX tiles) is optional at import time so a Cloud-only
+# import failure cannot blank the whole map.
 try:
     from coastal_flood_explorer.casr_common import CASRError
-    from coastal_flood_explorer.casr_pavics import (
-        CASR_PAVICS_DAILY_URL,
-        CASR_PAVICS_VARIABLES,
-        PAVICS_VARIABLE_DEFINITIONS,
-        PAVICS_VARIABLE_LABELS,
+    from coastal_flood_explorer.casr_v32 import (
+        CASR_V32_LATEST,
+        CASR_V32_VARIABLES,
+        V32_VARIABLE_DEFINITIONS,
+        V32_VARIABLE_LABELS,
         fetch_latest_for_roi,
         latest_available_day,
     )
@@ -142,24 +141,21 @@ try:
 
     _CASR_IMPORT_ERROR: str | None = None
 except ImportError as exc:
-    CASR_PAVICS_DAILY_URL = (
-        "https://pavics.ouranos.ca/twitcher/ows/proxy/thredds/dodsC/"
-        "datasets/reanalyses/day_NAM_GovCan_CaSR_v32_1980-2024.ncml"
+    CASR_V32_LATEST = date(2024, 12, 31)
+    CASR_V32_VARIABLES = (
+        "precip_24h",
+        "precip_hourly",
+        "rain",
+        "snowfall",
+        "snow_pack",
+        "snow_depth",
+        "freezing_rain",
+        "ice_pellets",
     )
-    CASR_PAVICS_VARIABLES = (
-        "tas",
-        "tasmax",
-        "tasmin",
-        "tdps",
-        "pr",
-        "snw",
-        "sfcWind",
-        "psl",
-    )
-    PAVICS_VARIABLE_DEFINITIONS = {
-        name: "CaSR v3.2 variable." for name in CASR_PAVICS_VARIABLES
+    V32_VARIABLE_DEFINITIONS = {
+        name: "CaSR v3.2 variable." for name in CASR_V32_VARIABLES
     }
-    PAVICS_VARIABLE_LABELS = {name: name for name in CASR_PAVICS_VARIABLES}
+    V32_VARIABLE_LABELS = {name: name for name in CASR_V32_VARIABLES}
 
     class CASRError(RuntimeError):
         """Fallback when the CaSR package failed to import."""
@@ -173,7 +169,7 @@ except ImportError as exc:
     build_casr_overlay_layer = None  # type: ignore[assignment]
     _CASR_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
     logging.getLogger("geo_stream.app").exception(
-        "CaSR PAVICS modules failed to import; map will load without CaSR"
+        "CaSR v3.2 modules failed to import; map will load without CaSR"
     )
 from coastal_flood_explorer.properties import (
     CONTRIBUTOR_VALUES,
@@ -193,7 +189,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 LOGGER = logging.getLogger("geo_stream.app")
 REPOSITORY_URL = "https://github.com/cameroneevenson-lgtm/geo_stream"
-MAP_COMPONENT_KEY = "coastal-flood-map-v10"
+MAP_COMPONENT_KEY = "coastal-flood-map-v11"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -357,10 +353,19 @@ def _cached_gdsps_datamart_bytes(
 
 
 @st.cache_data(ttl=3600, max_entries=4, show_spinner=False)
-def _cached_casr_latest_day(url: str) -> str:
-    """Return the latest PAVICS CaSR day as ISO YYYY-MM-DD (no ROI)."""
+def _cached_casr_latest_day() -> str:
+    """Return the latest HPFX CaSR v3.2 day as ISO YYYY-MM-DD (no ROI)."""
 
-    return latest_available_day(url=url).isoformat()
+    return latest_available_day().isoformat()
+
+
+@st.cache_data(ttl=3600, max_entries=24, show_spinner=False)
+def _cached_casr_tile(url: str) -> bytes:
+    """Download one CaSR v3.2 HPFX tile NetCDF keyed by absolute URL."""
+
+    from coastal_flood_explorer.casr_v32 import _download_tile_bytes
+
+    return _download_tile_bytes(url)
 
 
 def _gdsps_datamart_base_paths() -> tuple[str, ...]:
@@ -1156,14 +1161,14 @@ def _render_casr_controls(
     bbox: tuple[float, float, float, float] | None,
     active_roi: Mapping[str, Any] | None,
 ) -> None:
-    """Render CaSR v3.2 (PAVICS) controls — latest day only, no date picker."""
+    """Render native CaSR v3.2 (HPFX) controls — latest day only."""
 
     st.header("CaSR v3.2")
     st.caption(
-        "ECCC Canadian Surface Reanalysis via the PAVICS daily OPeNDAP "
-        "aggregate (CaSR v3.2). Historical reanalysis — not a flood warning, "
-        "tide gauge, or live coastal forecast. The date picker is temporarily "
-        "hidden; each fetch uses the newest published day for the drawn ROI."
+        "Native ECCC CaSR v3.2 from HPFX tiled NetCDF (not PAVICS). "
+        "Precipitation and snow fields only — CaSR does not provide coastal "
+        "water levels, tides, or storm surge. Date picker hidden; each fetch "
+        "uses the newest published day for the drawn ROI."
     )
     if _CASR_IMPORT_ERROR:
         st.error(
@@ -1176,44 +1181,49 @@ def _render_casr_controls(
         "Show CaSR v3.2 on the map",
         key="casr_enabled",
         help=(
-            "Opacity and visibility changes never re-contact PAVICS. "
-            "Fetching is a separate explicit action after you draw a region."
+            "Opacity changes never re-download HPFX tiles. Fetching is a "
+            "separate explicit action after you draw a region."
         ),
     )
 
     latest_day: date | None = None
     try:
-        latest_iso = _cached_casr_latest_day(CASR_PAVICS_DAILY_URL)
+        latest_iso = _cached_casr_latest_day()
         latest_day = date.fromisoformat(latest_iso)
-        st.info(f"Latest available PAVICS day: **{latest_day.isoformat()}** (UTC)")
+        st.info(f"Latest available CaSR day: **{latest_day.isoformat()}** (UTC)")
     except CASRError as exc:
         st.warning(str(exc))
+        latest_day = CASR_V32_LATEST
+        st.info(
+            f"Using published end date **{latest_day.isoformat()}** "
+            "(live latest-day probe failed)."
+        )
     except Exception:
-        LOGGER.exception("Could not resolve latest CaSR PAVICS day")
+        LOGGER.exception("Could not resolve latest CaSR v3.2 day")
+        latest_day = CASR_V32_LATEST
         st.warning(
-            "The latest CaSR v3.2 day could not be resolved from PAVICS yet. "
-            "You can still try a fetch after drawing a region."
+            "The latest CaSR v3.2 day could not be resolved from HPFX yet. "
+            f"Fetches will try {latest_day.isoformat()}."
         )
 
     variable = st.selectbox(
         "What to map",
-        CASR_PAVICS_VARIABLES,
-        format_func=lambda code: PAVICS_VARIABLE_LABELS.get(code, code),
+        CASR_V32_VARIABLES,
+        format_func=lambda code: V32_VARIABLE_LABELS.get(code, code),
         key="casr_selected_variable",
         help=(
-            "These are daily surface weather fields from ECCC's CaSR v3.2 "
-            "reanalysis (served by PAVICS). They are not flood polygons, "
-            "tide gauges, or surge forecasts."
+            "Water-related CaSR fields (precip/snow). Not CHS water levels "
+            "or GDSPS sea-surface height."
         ),
     )
-    st.caption(PAVICS_VARIABLE_DEFINITIONS[variable])
+    st.caption(V32_VARIABLE_DEFINITIONS[variable])
     opacity = st.slider(
         "CaSR overlay opacity",
         min_value=0.0,
         max_value=1.0,
         step=0.05,
         key="casr_opacity",
-        help="Adjusting opacity never re-downloads PAVICS data.",
+        help="Adjusting opacity never re-downloads HPFX tiles.",
     )
 
     existing = st.session_state.get("casr_overlay_params")
@@ -1253,18 +1263,16 @@ def _render_casr_controls(
         help=(
             "Draw a region first."
             if bbox is None
-            else (
-                "Stream the newest PAVICS day and mask it to the drawn ROI."
-                if latest_day is None
-                else (
-                    f"Stream {latest_day.isoformat()} from PAVICS and mask it "
-                    "to the drawn ROI."
-                )
-            )
+            else "Download intersecting HPFX tiles for the newest day."
         ),
     )
     if fetch and active_roi is not None:
-        _run_casr_fetch(variable, active_roi, float(opacity))
+        _run_casr_fetch(
+            variable,
+            active_roi,
+            float(opacity),
+            latest_day or CASR_V32_LATEST,
+        )
 
     stale = bool(
         st.session_state.get("casr_overlay_params")
@@ -1281,25 +1289,26 @@ def _run_casr_fetch(
     variable: str,
     active_roi: Mapping[str, Any],
     opacity: float,
+    day: date,
 ) -> None:
     status = st.status(
-        "Fetching latest CaSR v3.2 from PAVICS…",
+        "Fetching latest CaSR v3.2 from HPFX…",
         expanded=False,
     )
     try:
         with status:
             st.write(
-                "Opening the PAVICS daily aggregate and streaming the newest "
-                "day for the drawn ROI…"
+                f"Downloading native CaSR v3.2 tile(s) for {day:%Y-%m-%d}…"
             )
             subset = fetch_latest_for_roi(
                 roi=active_roi,
                 variable=variable,
-                url=CASR_PAVICS_DAILY_URL,
+                day=day,
+                download=_cached_casr_tile,
             )
             import base64
 
-            day = subset.selected_time.date()
+            day_stamp = subset.selected_time.date()
             overlays = [
                 {
                     "png_b64": base64.b64encode(subset.overlay_png).decode(
@@ -1313,11 +1322,8 @@ def _run_casr_fetch(
                     "subbasin_id": subset.subbasin_id,
                 }
             ]
-            plain = PAVICS_VARIABLE_LABELS.get(
-                subset.variable,
-                subset.variable,
-            )
-            label = f"CaSR v3.2 · {plain} · {day:%Y-%m-%d}"
+            plain = V32_VARIABLE_LABELS.get(subset.variable, subset.variable)
+            label = f"CaSR v3.2 · {plain} · {day_stamp:%Y-%m-%d}"
             st.session_state["casr_overlay_params"] = {
                 "label": label,
                 "opacity": opacity,
@@ -1327,11 +1333,11 @@ def _run_casr_fetch(
             st.session_state["casr_warnings"] = list(subset.warnings)
             st.session_state["casr_point_series"] = subset.point_series
             st.session_state["casr_subset_summary"] = (
-                f"{plain} · latest day {day:%Y-%m-%d}"
+                f"{plain} · latest day {day_stamp:%Y-%m-%d}"
                 + (f" · {subset.units}" if subset.units else "")
             )
             status.update(
-                label=f"CaSR v3.2 fetch complete ({day:%Y-%m-%d}).",
+                label=f"CaSR v3.2 fetch complete ({day_stamp:%Y-%m-%d}).",
                 state="complete",
             )
     except CASRError as exc:
@@ -1358,9 +1364,9 @@ def _render_casr_results() -> None:
             st.warning(warning)
     if series is not None:
         st.caption(
-            "Sample-point series nearest the ROI centroid for the trailing "
-            "window ending on the latest published day. Historical "
-            "reanalysis — not a warning product."
+            "Sample-point series nearest the ROI centroid ending on the "
+            "latest published day. Historical reanalysis — not water levels "
+            "and not a warning product."
         )
         try:
             chart_frame = series.rename(
@@ -2203,15 +2209,14 @@ def main() -> None:
     st.title("Geo Stream — CaSR v3.2")
     st.markdown(f"[View the Geo Stream repository on GitHub]({REPOSITORY_URL})")
     st.caption(
-        "Draw a Canadian region, then fetch the latest ECCC CaSR v3.2 day "
-        "from PAVICS for that exact shape. Other coastal layers (CHS gauges, "
-        "ECCC flood polygons, GDSPS/RESPS) are temporarily hidden from this UI."
+        "Draw a Canadian region, then fetch the latest native ECCC CaSR v3.2 "
+        "day from HPFX for that exact shape. CaSR is precip/snow reanalysis — "
+        "not coastal water levels. Other layers are temporarily hidden."
     )
     st.warning(
-        "Exploratory visualization only. CaSR v3.2 is historical surface "
-        "reanalysis (via PAVICS), not a warning service, inundation map, or "
-        "live coastal forecast. Official ECCC weather alerts and emergency "
-        "guidance take precedence."
+        "Exploratory visualization only. CaSR v3.2 does not provide water "
+        "levels, tides, or storm surge. Official ECCC weather alerts and "
+        "emergency guidance take precedence."
     )
 
     _render_sidebar()

@@ -529,7 +529,7 @@ def build_casr_overlay_layer(
     """Render CaSR v3.2 PNG grids + sample points as the map overlay.
 
     Overlay PNGs are produced in Python from NetCDF (no GeoMet WMS). Opacity
-    changes only rebuild this Folium group — they never re-contact PAVICS.
+    changes only rebuild this Folium group — they never re-download HPFX tiles.
     """
 
     overlay_label = CASR_LAYER_NAME

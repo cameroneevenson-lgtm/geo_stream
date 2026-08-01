@@ -139,7 +139,7 @@ app_module._cached_gdsps_datamart_files = fake_gdsps_files
 
 original_casr_latest = app_module._cached_casr_latest_day
 
-def fake_casr_latest(url):
+def fake_casr_latest():
     return "2024-12-31"
 
 fake_casr_latest.clear = lambda: None
@@ -628,7 +628,7 @@ def test_initial_render_explains_casr_v32_without_date_picker() -> None:
         element.value == "Geo Stream — CaSR v3.2" for element in app.title
     )
     assert any(
-        "Latest available PAVICS day: **2024-12-31**" in element.value
+        "Latest available CaSR day: **2024-12-31**" in element.value
         for element in app.info
     )
     # Date selector is abstracted out for now.
@@ -648,7 +648,7 @@ def test_initial_render_explains_casr_v32_without_date_picker() -> None:
         element.label == "What to map" for element in app.selectbox
     )
     assert any(
-        "Same idea as a daily mean thermometer reading" in element.value
+        "Not coastal water level" in element.value
         for element in app.caption
     )
     # Hidden layers must not appear in the Streamlit UI.

@@ -100,14 +100,14 @@ PAVICS_VARIABLE_DEFINITIONS: dict[str, str] = {
 }
 
 PAVICS_VARIABLE_LABELS: dict[str, str] = {
-    PAVICS_TAS: "Air temperature (daily mean, °C)",
-    PAVICS_TASMAX: "Air temperature (daily high, °C)",
-    PAVICS_TASMIN: "Air temperature (daily low, °C)",
-    PAVICS_TDPS: "Dew point / humidity (°C)",
-    PAVICS_PR: "Precipitation (mm/day)",
-    PAVICS_SNW: "Snow on ground (water equivalent, mm)",
-    PAVICS_SFCWIND: "Wind speed at 10 m (m/s)",
-    PAVICS_PSL: "Sea-level pressure (hPa)",
+    PAVICS_TAS: "Temperature",
+    PAVICS_TASMAX: "High temperature",
+    PAVICS_TASMIN: "Low temperature",
+    PAVICS_TDPS: "Dew point",
+    PAVICS_PR: "Precipitation",
+    PAVICS_SNW: "Snow on ground",
+    PAVICS_SFCWIND: "Wind",
+    PAVICS_PSL: "Pressure",
 }
 
 _TEMPERATURE_VARS = frozenset(

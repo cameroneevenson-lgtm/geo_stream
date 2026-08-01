@@ -71,10 +71,11 @@ def test_normalize_pavics_variable() -> None:
     assert normalize_pavics_variable("nope") is None
 
 
-def test_variable_labels_are_plain_english() -> None:
-    assert PAVICS_VARIABLE_LABELS[PAVICS_TAS].startswith("Air temperature")
-    assert "mm/day" in PAVICS_VARIABLE_LABELS[PAVICS_PR]
-    assert "tas —" not in PAVICS_VARIABLE_LABELS[PAVICS_TAS]
+def test_variable_labels_are_concise() -> None:
+    assert PAVICS_VARIABLE_LABELS[PAVICS_TAS] == "Temperature"
+    assert PAVICS_VARIABLE_LABELS[PAVICS_PR] == "Precipitation"
+    assert "tas" not in PAVICS_VARIABLE_LABELS[PAVICS_TAS].lower()
+    assert all(len(label) <= 20 for label in PAVICS_VARIABLE_LABELS.values())
 
 
 def test_latest_available_day_uses_last_time() -> None:

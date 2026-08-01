@@ -108,6 +108,7 @@ from coastal_flood_explorer.gdsps_wms import (
 )
 from coastal_flood_explorer.casr_common import (
     CASR_HPFX_ROOT,
+    CASR_RIVERS_DEFAULT,
     CASR_RIVERS_END,
     CASR_RIVERS_START,
     CASR_RIVERS_VARIABLES,

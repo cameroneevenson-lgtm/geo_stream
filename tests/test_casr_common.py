@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 
 from coastal_flood_explorer.casr_common import (
+    CASR_RIVERS_DEFAULT,
     CASR_RIVERS_END,
     CASR_RIVERS_START,
     CASRConfigurationError,

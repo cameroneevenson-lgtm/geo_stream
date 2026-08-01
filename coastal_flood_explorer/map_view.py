@@ -518,7 +518,7 @@ def build_gdsps_overlay_layer(
     return group
 
 
-CASR_LAYER_NAME = "CaSR-Rivers"
+CASR_LAYER_NAME = "CaSR-Land"
 
 
 def build_casr_overlay_layer(
@@ -526,7 +526,7 @@ def build_casr_overlay_layer(
     *,
     enabled: bool = True,
 ) -> folium.FeatureGroup:
-    """Render CaSR-Rivers PNG grids + sample points as the hero overlay.
+    """Render CaSR-Land PNG grids + sample points as the map overlay.
 
     Overlay PNGs are produced in Python from NetCDF (no GeoMet WMS). Opacity
     changes only rebuild this Folium group — they never re-download HPFX files.

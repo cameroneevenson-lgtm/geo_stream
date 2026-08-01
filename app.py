@@ -125,59 +125,65 @@ from coastal_flood_explorer.map_view import (
     risk_legend_html,
 )
 
-# CaSR is optional at import time so a Cloud-only import failure cannot blank
-# the whole map. The real exception text is kept for the sidebar (Streamlit
-# Cloud redacts it from the main crash screen).
+# CaSR-Land is optional at import time so a Cloud-only import failure cannot
+# blank the whole map. The real exception text is kept for the sidebar
+# (Streamlit Cloud redacts it from the main crash screen).
 try:
-    from coastal_flood_explorer.casr_common import (
-        CASR_HPFX_ROOT,
-        CASR_RIVERS_DEFAULT,
-        CASR_RIVERS_END,
-        CASR_RIVERS_START,
-        CASR_RIVERS_VARIABLES,
-        DEEP_RESERVOIR_STORAGE,
-        RIVER_CHANNEL_STORAGE,
-        RIVER_DISCHARGE,
-        VARIABLE_DEFINITIONS as CASR_VARIABLE_DEFINITIONS,
-        CASRError,
-        parse_month_token,
+    from coastal_flood_explorer.casr_common import CASR_HPFX_ROOT, CASRError
+    from coastal_flood_explorer.casr_land import (
+        CASR_LAND_DEFAULT,
+        CASR_LAND_END,
+        CASR_LAND_START,
+        CASR_LAND_VARIABLES,
+        LAND_AIR_TEMP,
+        LAND_DEWPOINT,
+        LAND_RUNOFF,
+        LAND_SWE,
+        LAND_VARIABLE_DEFINITIONS,
+        LAND_WIND_U,
+        LAND_WIND_V,
+        download_land_day,
+        fetch_land_for_roi,
     )
-    from coastal_flood_explorer.casr_hpfx import CASRHpfxClient
-    from coastal_flood_explorer import casr_service
     from coastal_flood_explorer.map_view import build_casr_overlay_layer
 
     _CASR_IMPORT_ERROR: str | None = None
 except ImportError as exc:
     CASR_HPFX_ROOT = "https://hpfx.collab.science.gc.ca"
-    CASR_RIVERS_DEFAULT = date(2017, 12, 1)
-    CASR_RIVERS_END = date(2017, 12, 31)
-    CASR_RIVERS_START = date(1980, 1, 1)
-    CASR_RIVERS_VARIABLES = (
-        "RiverDischarge",
-        "RiverChannelStorage",
-        "DeepReservoirStorage",
+    CASR_LAND_DEFAULT = date(2017, 12, 31)
+    CASR_LAND_END = date(2017, 12, 31)
+    CASR_LAND_START = date(1980, 1, 1)
+    CASR_LAND_VARIABLES = (
+        "TJ_1.5m",
+        "TDK_1.5m",
+        "TRAF_Aggregated",
+        "SWE_Land",
+        "UDC_10m",
+        "VDC_10m",
     )
-    DEEP_RESERVOIR_STORAGE = "DeepReservoirStorage"
-    RIVER_CHANNEL_STORAGE = "RiverChannelStorage"
-    RIVER_DISCHARGE = "RiverDischarge"
-    CASR_VARIABLE_DEFINITIONS = {
-        name: "CaSR-Rivers variable." for name in CASR_RIVERS_VARIABLES
+    LAND_AIR_TEMP = "TJ_1.5m"
+    LAND_DEWPOINT = "TDK_1.5m"
+    LAND_RUNOFF = "TRAF_Aggregated"
+    LAND_SWE = "SWE_Land"
+    LAND_WIND_U = "UDC_10m"
+    LAND_WIND_V = "VDC_10m"
+    LAND_VARIABLE_DEFINITIONS = {
+        name: "CaSR-Land variable." for name in CASR_LAND_VARIABLES
     }
 
     class CASRError(RuntimeError):
         """Fallback when the CaSR package failed to import."""
 
-    def parse_month_token(value: date | str) -> str:
-        if isinstance(value, date):
-            return f"{value.year:04d}{value.month:02d}"
-        return str(value)
+    def download_land_day(*_args: Any, **_kwargs: Any) -> bytes:
+        raise CASRError("CaSR-Land is unavailable in this deployment.")
 
-    CASRHpfxClient = None  # type: ignore[assignment,misc]
-    casr_service = None  # type: ignore[assignment]
+    def fetch_land_for_roi(*_args: Any, **_kwargs: Any) -> Any:
+        raise CASRError("CaSR-Land is unavailable in this deployment.")
+
     build_casr_overlay_layer = None  # type: ignore[assignment]
     _CASR_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
     logging.getLogger("geo_stream.app").exception(
-        "CaSR modules failed to import; map will load without CaSR"
+        "CaSR-Land modules failed to import; map will load without CaSR"
     )
 from coastal_flood_explorer.properties import (
     CONTRIBUTOR_VALUES,
@@ -197,7 +203,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 LOGGER = logging.getLogger("geo_stream.app")
 REPOSITORY_URL = "https://github.com/cameroneevenson-lgtm/geo_stream"
-MAP_COMPONENT_KEY = "coastal-flood-map-v8"
+MAP_COMPONENT_KEY = "coastal-flood-map-v9"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -222,7 +228,7 @@ STATE_DEFAULTS: dict[str, Any] = {
     "chs_bundles": {},
     "chs_selection_roi": None,
     "selected_chs_station_id": None,
-    "casr_enabled": False,
+    "casr_enabled": True,
     "casr_overlay_params": None,
     "casr_opacity": 0.75,
     "casr_fetch_roi": None,
@@ -360,29 +366,12 @@ def _cached_gdsps_datamart_bytes(
     return client.download(url)
 
 
-@st.cache_data(ttl=3600, max_entries=16, show_spinner=False)
-def _cached_casr_files(
-    root: str,
-    year_month: str,
-    variable: str | None,
-) -> tuple[tuple[Any, ...], str | None]:
-    """List CaSR-Rivers files for one month (primitive cache key)."""
+@st.cache_data(ttl=3600, max_entries=8, show_spinner=False)
+def _cached_casr_land_day(yyyymmdd: str) -> bytes:
+    """Download one CaSR-Land day NetCDF keyed by YYYYMMDD (no ROI)."""
 
-    try:
-        files = CASRHpfxClient(root=root).list_files(
-            year_month,
-            variable=variable,
-        )
-        return files, None
-    except CASRError as exc:
-        return (), str(exc)
-
-
-@st.cache_data(ttl=3600, max_entries=48, show_spinner=False)
-def _cached_casr_bytes(root: str, url: str) -> bytes:
-    """Download one CaSR-Rivers NetCDF keyed by absolute URL."""
-
-    return CASRHpfxClient(root=root).download(url)
+    day = datetime.strptime(yyyymmdd, "%Y%m%d").date()
+    return download_land_day(day, root=CASR_HPFX_ROOT)
 
 
 def _gdsps_datamart_base_paths() -> tuple[str, ...]:
@@ -1178,74 +1167,63 @@ def _render_casr_controls(
     bbox: tuple[float, float, float, float] | None,
     active_roi: Mapping[str, Any] | None,
 ) -> None:
-    """Render optional CaSR-Rivers controls (secondary to coastal layers)."""
+    """Render CaSR-Land controls (currently the only exposed data layer)."""
 
-    st.divider()
-    st.header("CaSR-Rivers (optional)")
+    st.header("CaSR-Land")
     st.caption(
-        "Optional inland river reanalysis (ECCC CaSR-Rivers v2.1, ends 2017). "
-        "This is not coastal flood, surge, or tide data. Prefer CHS gauges, "
-        "ECCC coastal-flood polygons, and GDSPS/RESPS for the coast."
+        "ECCC Canadian Surface Reanalysis (CaSR-Land v2.1) on the North "
+        "American land/surface grid. Historical reanalysis through "
+        f"{CASR_LAND_END:%Y-%m-%d} — not a flood warning, tide gauge, or "
+        "live coastal forecast. Each day file is large (~110 MB); draw a "
+        "compact coastal ROI before fetching."
     )
     if _CASR_IMPORT_ERROR:
         st.error(
-            "CaSR-Rivers could not be loaded in this deployment. Coastal "
-            "tools still work. Import error: "
+            "CaSR-Land could not be loaded in this deployment. Import error: "
             f"{_CASR_IMPORT_ERROR}"
         )
         return
     enabled = st.checkbox(
-        "Show CaSR-Rivers on the map",
+        "Show CaSR-Land on the map",
         key="casr_enabled",
         help=(
-            "Off by default. Fetching NetCDF is a separate explicit action "
-            "after you draw a region."
+            "Opacity and visibility changes never re-download the day file. "
+            "Fetching NetCDF is a separate explicit action after you draw a "
+            "region."
         ),
     )
-    # Month is chosen offline from the published CaSR-Rivers window. Listing
-    # hundreds of HPFX directories here blocked the Streamlit run before the map
-    # could render (15s+ on a good link; minutes with retries when HPFX is
-    # slow). Network contact stays on the explicit Fetch button.
-    month_value = st.date_input(
-        "Reanalysis month",
-        value=CASR_RIVERS_DEFAULT,
-        min_value=CASR_RIVERS_START,
-        max_value=CASR_RIVERS_END,
-        key="casr_selected_month_date",
+    # Day is chosen offline from the published CaSR-Land window. Network
+    # contact stays on the explicit Fetch button so the map can render first.
+    day_value = st.date_input(
+        "Reanalysis day (UTC)",
+        value=CASR_LAND_DEFAULT,
+        min_value=CASR_LAND_START,
+        max_value=CASR_LAND_END,
+        key="casr_selected_day",
         help=(
-            "CaSR-Rivers v2.1 per-subbasin files are one calendar month each "
-            f"({CASR_RIVERS_START:%Y-%m} to {CASR_RIVERS_END:%Y-%m}). Defaults "
-            f"to the latest published month ({CASR_RIVERS_DEFAULT:%Y-%m}). "
-            "Day is ignored; the whole month is fetched."
+            "CaSR-Land v2.1 publishes one NetCDF per day "
+            f"({CASR_LAND_START:%Y-%m-%d} to {CASR_LAND_END:%Y-%m-%d}). "
+            f"Defaults to the latest published day ({CASR_LAND_DEFAULT:%Y-%m-%d})."
         ),
     )
-    if isinstance(month_value, tuple):
-        month_value = month_value[0] if month_value else CASR_RIVERS_DEFAULT
-    if not isinstance(month_value, date):
-        month_value = CASR_RIVERS_DEFAULT
-    year_month = parse_month_token(month_value)
+    if isinstance(day_value, tuple):
+        day_value = day_value[0] if day_value else CASR_LAND_DEFAULT
+    if not isinstance(day_value, date):
+        day_value = CASR_LAND_DEFAULT
     variable = st.selectbox(
         "Variable",
-        CASR_RIVERS_VARIABLES,
+        CASR_LAND_VARIABLES,
         format_func=lambda code: {
-            RIVER_DISCHARGE: "RiverDischarge — streamflow (m³/s)",
-            RIVER_CHANNEL_STORAGE: "RiverChannelStorage — channel storage (m³)",
-            DEEP_RESERVOIR_STORAGE: (
-                "DeepReservoirStorage — lower-zone storage (kg/m²)"
-            ),
+            LAND_AIR_TEMP: "TJ_1.5m — air temperature at 1.5 m (°C)",
+            LAND_DEWPOINT: "TDK_1.5m — dew point at 1.5 m (°C)",
+            LAND_RUNOFF: "TRAF_Aggregated — accumulated surface runoff",
+            LAND_SWE: "SWE_Land — snow water equivalent",
+            LAND_WIND_U: "UDC_10m — 10 m U wind (m/s)",
+            LAND_WIND_V: "VDC_10m — 10 m V wind (m/s)",
         }.get(code, code),
         key="casr_selected_variable",
     )
-    st.caption(CASR_VARIABLE_DEFINITIONS[variable])
-    subbasin_override = st.text_input(
-        "Sub-basin ID (optional)",
-        key="casr_subbasin_id",
-        help=(
-            "CCCRIS-style explicit node. Leave blank to probe basins that "
-            "intersect the drawn ROI (capped)."
-        ),
-        placeholder="e.g. 01AA000",
-    )
+    st.caption(LAND_VARIABLE_DEFINITIONS[variable])
     opacity = st.slider(
         "CaSR overlay opacity",
         min_value=0.0,
@@ -1255,36 +1233,48 @@ def _render_casr_controls(
         help="Adjusting opacity never re-downloads HPFX NetCDF files.",
     )
 
-    # Keep opacity on an existing overlay without refetching.
     existing = st.session_state.get("casr_overlay_params")
     if enabled and isinstance(existing, Mapping) and existing.get("overlays"):
         updated = dict(existing)
         updated["opacity"] = float(opacity)
         st.session_state["casr_overlay_params"] = updated
-    elif not enabled:
-        # Keep stored overlays so re-enabling does not require a refetch, but
-        # the map builder hides them when enabled is false.
-        pass
+
+    if bbox is None:
+        st.info(
+            "No region selected yet. Use the polygon or rectangle button "
+            "in the map's upper-left drawing toolbar to draw within Canada."
+        )
+    else:
+        st.success("Region selected — CaSR-Land fetch is ready.")
+        st.caption("Active ROI bounds (CRS84: lon, lat)")
+        st.code(
+            "\n".join(
+                (
+                    f"minLon: {bbox[0]:.6f}",
+                    f"minLat: {bbox[1]:.6f}",
+                    f"maxLon: {bbox[2]:.6f}",
+                    f"maxLat: {bbox[3]:.6f}",
+                )
+            ),
+            language=None,
+        )
+
+    for warning in st.session_state.get("drawing_warnings", []):
+        st.warning(warning)
 
     fetch = st.button(
-        "Fetch CaSR-Rivers for ROI",
+        "Fetch CaSR-Land for ROI",
         type="primary",
         disabled=bbox is None or active_roi is None,
         width="stretch",
         help=(
             "Draw a region first."
             if bbox is None
-            else "Probe intersecting sub-basins and download the selected variable."
+            else "Download the selected day and mask it to the drawn ROI."
         ),
     )
     if fetch and active_roi is not None:
-        _run_casr_fetch(
-            year_month,
-            variable,
-            active_roi,
-            subbasin_override.strip() or None,
-            float(opacity),
-        )
+        _run_casr_fetch(day_value, variable, active_roi, float(opacity))
 
     stale = bool(
         st.session_state.get("casr_overlay_params")
@@ -1293,106 +1283,79 @@ def _render_casr_controls(
     if stale:
         st.warning(
             "The CaSR overlay was fetched for a previous drawing. Fetch again "
-            "for the current ROI — download stays disabled until then."
+            "for the current ROI."
         )
 
 
 def _run_casr_fetch(
-    year_month: str,
+    day: date,
     variable: str,
     active_roi: Mapping[str, Any],
-    subbasin_id: str | None,
     opacity: float,
 ) -> None:
-    status = st.status("Fetching CaSR-Rivers for the drawn region…", expanded=False)
+    status = st.status("Fetching CaSR-Land for the drawn region…", expanded=False)
     try:
         with status:
-            st.write("Listing HPFX per-subbasin files…")
+            st.write(
+                f"Downloading CaSR-Land day {day:%Y-%m-%d} from HPFX "
+                "(~110 MB; may take a minute)…"
+            )
 
-            def list_files(
-                month: str,
-                var: str | None,
-            ) -> tuple[Any, ...]:
-                files, error = _cached_casr_files(CASR_HPFX_ROOT, month, var)
-                if error and not files:
-                    raise CASRError(error)
-                return files
+            def download(selected_day: date) -> bytes:
+                return _cached_casr_land_day(selected_day.strftime("%Y%m%d"))
 
-            def download(file: Any) -> bytes:
-                return _cached_casr_bytes(CASR_HPFX_ROOT, file.url)
-
-            result = casr_service.fetch_for_roi(
-                year_month=year_month,
+            subset = fetch_land_for_roi(
+                day=day,
                 variable=variable,
                 roi=active_roi,
-                list_files=list_files,
                 download=download,
-                subbasin_id=subbasin_id,
             )
             import base64
 
-            overlays = []
-            series_frames = []
-            for subset in result.subsets:
-                overlays.append(
-                    {
-                        "png_b64": base64.b64encode(subset.overlay_png).decode(
-                            "ascii"
-                        ),
-                        "bounds": [
-                            list(subset.overlay_bounds[0]),
-                            list(subset.overlay_bounds[1]),
-                        ],
-                        "point": list(subset.point),
-                        "subbasin_id": subset.subbasin_id,
-                    }
-                )
-                frame = subset.point_series.copy()
-                frame.insert(0, "subbasin_id", subset.subbasin_id)
-                series_frames.append(frame)
-            label = (
-                f"CaSR-Rivers · {result.variable} · {result.year_month}"
-            )
+            overlays = [
+                {
+                    "png_b64": base64.b64encode(subset.overlay_png).decode(
+                        "ascii"
+                    ),
+                    "bounds": [
+                        list(subset.overlay_bounds[0]),
+                        list(subset.overlay_bounds[1]),
+                    ],
+                    "point": list(subset.point),
+                    "subbasin_id": subset.subbasin_id,
+                }
+            ]
+            label = f"CaSR-Land · {subset.variable} · {day:%Y-%m-%d}"
             st.session_state["casr_overlay_params"] = {
                 "label": label,
                 "opacity": opacity,
                 "overlays": overlays,
             }
             st.session_state["casr_fetch_roi"] = copy.deepcopy(active_roi)
-            st.session_state["casr_warnings"] = list(result.warnings)
-            for subset in result.subsets:
-                st.session_state["casr_warnings"].extend(subset.warnings)
-            if series_frames:
-                import pandas as pd
-
-                st.session_state["casr_point_series"] = pd.concat(
-                    series_frames,
-                    ignore_index=True,
-                )
-            else:
-                st.session_state["casr_point_series"] = None
+            st.session_state["casr_warnings"] = list(subset.warnings)
+            st.session_state["casr_point_series"] = subset.point_series
             st.session_state["casr_subset_summary"] = (
-                f"{len(result.subsets)} sub-basin(s) · {result.variable} · "
-                f"{result.year_month}"
+                f"{subset.variable} · {day:%Y-%m-%d}"
+                + (f" · {subset.units}" if subset.units else "")
             )
-            status.update(label="CaSR-Rivers fetch complete.", state="complete")
+            status.update(label="CaSR-Land fetch complete.", state="complete")
     except CASRError as exc:
-        status.update(label="CaSR-Rivers fetch failed.", state="error")
+        status.update(label="CaSR-Land fetch failed.", state="error")
         st.error(str(exc))
     except Exception:
-        LOGGER.exception("Unexpected CaSR fetch failure")
-        status.update(label="CaSR-Rivers fetch failed.", state="error")
-        st.error("CaSR-Rivers data could not be fetched for this region.")
+        LOGGER.exception("Unexpected CaSR-Land fetch failure")
+        status.update(label="CaSR-Land fetch failed.", state="error")
+        st.error("CaSR-Land data could not be fetched for this region.")
 
 
 def _render_casr_results() -> None:
-    """Show CaSR point series under the map (CCCRIS-style node chart)."""
+    """Show CaSR-Land point series under the map."""
 
     summary = st.session_state.get("casr_subset_summary")
     series = st.session_state.get("casr_point_series")
     if not summary and series is None:
         return
-    st.subheader("CaSR-Rivers")
+    st.subheader("CaSR-Land")
     if summary:
         st.caption(summary)
     for warning in st.session_state.get("casr_warnings") or []:
@@ -1400,8 +1363,8 @@ def _render_casr_results() -> None:
             st.warning(warning)
     if series is not None:
         st.caption(
-            "Sample-point time series nearest the ROI centroid inside each "
-            "loaded sub-basin. Historical reanalysis — not a warning product."
+            "Sample-point time series nearest the ROI centroid. Historical "
+            "reanalysis — not a warning product."
         )
         try:
             chart_frame = series.rename(
@@ -1410,15 +1373,7 @@ def _render_casr_results() -> None:
                     "value": "CaSR value",
                 }
             )
-            if "subbasin_id" in chart_frame.columns:
-                st.line_chart(
-                    chart_frame,
-                    x="time",
-                    y="CaSR value",
-                    color="subbasin_id",
-                )
-            else:
-                st.line_chart(chart_frame, x="time", y="CaSR value")
+            st.line_chart(chart_frame, x="time", y="CaSR value")
         except Exception:
             LOGGER.exception("CaSR chart rendering failed")
             st.dataframe(series, width="stretch")
@@ -1907,434 +1862,14 @@ def _render_feedback_form() -> None:
             st.session_state["feedback_submission_in_progress"] = False
 
 
-def _render_sidebar() -> tuple[FilterCriteria, str | None]:
-    action_error: str | None = None
-    bbox = _current_bbox()
-    archive_window = recent_archive_window()
+def _render_sidebar() -> None:
+    """Render the sidebar — CaSR-Land only; other layers are hidden for now."""
 
+    bbox = _current_bbox()
     with st.sidebar:
         _render_feedback_form()
         st.divider()
-        st.header("ECCC coastal flood overlay")
-        if bbox is None:
-            st.info(
-                "No region selected yet. Use the polygon or rectangle button "
-                "in the map's upper-left drawing toolbar to draw within Canada."
-            )
-        else:
-            st.success("Region selected — the data actions are ready.")
-            st.caption("Active ROI bounds (CRS84: lon, lat)")
-            st.code(
-                "\n".join(
-                    (
-                        f"minLon: {bbox[0]:.6f}",
-                        f"minLat: {bbox[1]:.6f}",
-                        f"maxLon: {bbox[2]:.6f}",
-                        f"maxLat: {bbox[3]:.6f}",
-                    )
-                ),
-                language=None,
-            )
-
-        for warning in st.session_state.get("drawing_warnings", []):
-            st.warning(warning)
-
-        archive_range_value = st.date_input(
-            "Archived ECCC issue-date range (UTC)",
-            value=(archive_window.oldest, archive_window.newest),
-            min_value=archive_window.oldest,
-            max_value=archive_window.newest,
-            key="selected_archive_range",
-            help=(
-                "Choose both endpoints of an inclusive range within ECCC's "
-                "rolling 30-day forecast archive."
-            ),
-        )
-        requested_range = _normalize_archive_range(
-            archive_range_value,
-            archive_window,
-        )
-        range_day_count = (
-            len(inclusive_archive_dates(*requested_range))
-            if requested_range is not None
-            else 0
-        )
-        st.caption(
-            "The default covers all 30 retained issue dates. Fetching combines "
-            "each daily forecast snapshot; it is not a 30-day average or "
-            "observed flood history. Today's issue may still be publishing. "
-            "Changing the range does not contact ECCC."
-        )
-        if requested_range is None:
-            st.warning(
-                "Choose both a start date and an end date before fetching."
-            )
-        fetch_archive = st.button(
-            (
-                f"Fetch ECCC archive range ({range_day_count} "
-                f"{'day' if range_day_count == 1 else 'days'})"
-                if requested_range is not None
-                else "Fetch ECCC archive range"
-            ),
-            type="primary",
-            disabled=bbox is None or requested_range is None,
-            width="stretch",
-        )
-
-        synthetic_enabled = st.checkbox(
-            "Use synthetic test data",
-            value=False,
-            key="use_synthetic_test_data",
-            help="Synthetic features are generated locally and are not ECCC data.",
-        )
-
-        generate_synthetic = False
-        if synthetic_enabled:
-            generate_synthetic = st.button(
-                "Generate synthetic test data",
-                disabled=bbox is None,
-                width="stretch",
-            )
-
-        if (
-            fetch_archive
-            and bbox is not None
-            and requested_range is not None
-        ):
-            active_roi = st.session_state.get("active_roi")
-            range_start, range_end = requested_range
-            requested_dates = inclusive_archive_dates(
-                range_start,
-                range_end,
-            )
-            fetch_progress = st.status(
-                "Fetching ECCC archive date range…",
-                expanded=True,
-                state="running",
-            )
-            try:
-                with fetch_progress:
-                    date_progress = st.progress(
-                        0.0,
-                        text=(
-                            f"Preparing {len(requested_dates)} daily archive "
-                            "partition(s)…"
-                        ),
-                    )
-                    date_message = st.empty()
-                    successes: list[
-                        tuple[str, ArchiveFetchResult]
-                    ] = []
-                    failures: list[tuple[str, str]] = []
-                    product_urls: set[str] = set()
-                    document_urls: set[str] = set()
-                    range_feature_count = 0
-                    for index, issue_date in enumerate(
-                        requested_dates,
-                        start=1,
-                    ):
-                        display_date = datetime.strptime(
-                            issue_date,
-                            "%Y%m%d",
-                        ).date().isoformat()
-                        date_message.write(
-                            f"Checking {display_date} "
-                            f"({index}/{len(requested_dates)})…"
-                        )
-                        (
-                            daily_result,
-                            daily_error,
-                            systemic_failure,
-                        ) = _cached_archive_fetch(
-                            ARCHIVE_BASE_URL,
-                            issue_date,
-                        )
-                        if daily_result is None:
-                            failures.append(
-                                (
-                                    issue_date,
-                                    daily_error
-                                    or "The archive date could not be loaded.",
-                                )
-                            )
-                            if systemic_failure:
-                                skipped_message = (
-                                    "Not attempted after a systemic ECCC "
-                                    "archive service failure."
-                                )
-                                failures.extend(
-                                    (remaining_date, skipped_message)
-                                    for remaining_date in requested_dates[index:]
-                                )
-                                date_progress.progress(
-                                    1.0,
-                                    text=(
-                                        "Stopped the remaining dates after "
-                                        "an ECCC service failure"
-                                    ),
-                                )
-                                break
-                        else:
-                            daily_features = daily_result.collection.get(
-                                "features"
-                            )
-                            if not isinstance(daily_features, list):
-                                raise ArchiveError(
-                                    "An ECCC archive date returned an invalid "
-                                    "FeatureCollection. The previous results "
-                                    "were kept."
-                                )
-                            next_product_urls = product_urls | {
-                                product.url
-                                for product in daily_result.products
-                            }
-                            next_document_urls = document_urls | {
-                                document.product.url
-                                for document in daily_result.documents
-                            }
-                            next_feature_count = (
-                                range_feature_count + len(daily_features)
-                            )
-                            limit_message: str | None = None
-                            if (
-                                len(next_product_urls) > MAX_ARCHIVE_FILES
-                                or len(next_document_urls) > MAX_ARCHIVE_FILES
-                            ):
-                                limit_message = (
-                                    "Not included because the selected range "
-                                    f"would exceed the {MAX_ARCHIVE_FILES}-file "
-                                    "safety limit."
-                                )
-                            elif next_feature_count > MAX_TOTAL_FEATURES:
-                                limit_message = (
-                                    "Not included because the selected range "
-                                    "would exceed the "
-                                    f"{MAX_TOTAL_FEATURES}-feature safety limit."
-                                )
-                            if limit_message is not None:
-                                failures.append((issue_date, limit_message))
-                                skipped_message = (
-                                    "Not attempted after the archive range "
-                                    "reached a safety limit."
-                                )
-                                failures.extend(
-                                    (remaining_date, skipped_message)
-                                    for remaining_date in requested_dates[index:]
-                                )
-                                date_progress.progress(
-                                    1.0,
-                                    text=(
-                                        "Stopped the remaining dates at the "
-                                        "archive range safety limit"
-                                    ),
-                                )
-                                break
-
-                            successes.append((issue_date, daily_result))
-                            product_urls = next_product_urls
-                            document_urls = next_document_urls
-                            range_feature_count = next_feature_count
-                            reached_limit = (
-                                len(product_urls) == MAX_ARCHIVE_FILES
-                                or len(document_urls) == MAX_ARCHIVE_FILES
-                                or range_feature_count == MAX_TOTAL_FEATURES
-                            )
-                            if reached_limit and index < len(requested_dates):
-                                skipped_message = (
-                                    "Not attempted because the archive range "
-                                    "reached a safety limit."
-                                )
-                                failures.extend(
-                                    (remaining_date, skipped_message)
-                                    for remaining_date in requested_dates[index:]
-                                )
-                                date_progress.progress(
-                                    1.0,
-                                    text=(
-                                        "Stopped the remaining dates at the "
-                                        "archive range safety limit"
-                                    ),
-                                )
-                                break
-                        date_progress.progress(
-                            index / len(requested_dates),
-                            text=(
-                                f"Checked {index} of "
-                                f"{len(requested_dates)} issue dates"
-                            ),
-                        )
-
-                    archive_result = combine_archive_range(
-                        range_start,
-                        range_end,
-                        successes=successes,
-                        failures=failures,
-                    )
-                    if archive_result.successful_date_count == 0:
-                        raise ArchiveError(
-                            "None of the selected ECCC archive dates could be "
-                            "loaded. The previous results were kept."
-                        )
-                    date_message.write(
-                        f"Loaded {archive_result.successful_date_count} of "
-                        f"{archive_result.requested_date_count} issue dates."
-                    )
-                    st.write(
-                        f"Validated {len(archive_result.products)} archived "
-                        "forecast file(s) across the range."
-                    )
-                    st.write(
-                        "Clipping their polygons locally to the exact region…"
-                    )
-                    clipped = clip_feature_collection(
-                        archive_result.collection,
-                        active_roi,
-                    )
-                _store_dataset(
-                    raw_response=archive_result.collection,
-                    clipped_data=clipped.feature_collection,
-                    bbox=bbox,
-                    roi=active_roi,
-                    source_mode="archive",
-                    warnings=clipped.warnings,
-                    archive_range=requested_range,
-                    archive_product_count=len(archive_result.products),
-                    archive_requested_date_count=(
-                        archive_result.requested_date_count
-                    ),
-                    archive_successful_date_count=(
-                        archive_result.successful_date_count
-                    ),
-                    archive_date_failures=_archive_failure_details(
-                        archive_result
-                    ),
-                    raw_archive_download=raw_range_bundle_bytes(
-                        archive_result,
-                    ),
-                )
-                failed_count = archive_result.failed_date_count
-                range_completion = (
-                    f"loaded partially with {failed_count} "
-                    f"{'date' if failed_count == 1 else 'dates'} not loaded"
-                    if failed_count
-                    else "fetch complete"
-                )
-                fetch_progress.update(
-                    label=(
-                        f"ECCC archive range {range_completion} — "
-                        f"{archive_result.successful_date_count}/"
-                        f"{archive_result.requested_date_count} date(s), "
-                        f"{len(archive_result.products)} file(s), "
-                        f"{st.session_state['raw_feature_count']} feature(s), "
-                        f"{st.session_state['clipped_feature_count']} intersected "
-                        "the region"
-                    ),
-                    state="complete",
-                    expanded=False,
-                )
-            except (ArchiveError, GeometryError) as exc:
-                LOGGER.warning("Archive fetch failed: %s", exc, exc_info=True)
-                action_error = str(exc)
-                fetch_progress.update(
-                    label=(
-                        "ECCC archive fetch failed — previous results were kept"
-                    ),
-                    state="error",
-                    expanded=True,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "Unexpected failure while fetching the ECCC archive"
-                )
-                action_error = (
-                    "An unexpected error occurred while processing the ECCC "
-                    "archive. The previous results were kept."
-                )
-                fetch_progress.update(
-                    label=(
-                        "ECCC archive fetch failed — previous results were kept"
-                    ),
-                    state="error",
-                    expanded=True,
-                )
-
-        if generate_synthetic and bbox is not None:
-            active_roi = st.session_state.get("active_roi")
-            try:
-                generated = generate_synthetic_data(active_roi)
-                clipped = clip_feature_collection(generated, active_roi)
-                _store_dataset(
-                    raw_response=generated,
-                    clipped_data=clipped.feature_collection,
-                    bbox=bbox,
-                    roi=active_roi,
-                    source_mode="synthetic",
-                    warnings=clipped.warnings,
-                )
-            except GeometryError as exc:
-                LOGGER.warning(
-                    "Synthetic generation failed: %s",
-                    exc,
-                    exc_info=True,
-                )
-                action_error = str(exc)
-            except Exception:
-                LOGGER.exception("Unexpected synthetic-data failure")
-                action_error = (
-                    "Synthetic test data could not be generated for this ROI."
-                )
-
-        _render_gdsps_controls(bbox, st.session_state.get("active_roi"))
         _render_casr_controls(bbox, st.session_state.get("active_roi"))
-
-        clipped_data = st.session_state.get("clipped_data")
-        options = forecast_period_options(clipped_data)
-        selected_validity = st.session_state.get(
-            "filter_validity",
-            ALL_FORECAST_PERIODS,
-        )
-        if selected_validity not in options:
-            st.session_state["filter_validity"] = ALL_FORECAST_PERIODS
-
-        st.divider()
-        st.header("Filters")
-        validity = st.selectbox(
-            "Forecast validity time",
-            options,
-            key="filter_validity",
-        )
-        risks = st.multiselect(
-            "Risk level",
-            list(RISK_LEVELS),
-            default=list(RISK_LEVELS),
-            key="filter_risks",
-        )
-        tide = st.selectbox(
-            "Tide contribution",
-            CONTRIBUTOR_VALUES,
-            key="filter_tide",
-        )
-        storm_surge = st.selectbox(
-            "Storm-surge contribution",
-            CONTRIBUTOR_VALUES,
-            key="filter_storm_surge",
-        )
-        waves = st.selectbox(
-            "Wave contribution",
-            CONTRIBUTOR_VALUES,
-            key="filter_waves",
-        )
-
-    return (
-        FilterCriteria(
-            validity=validity,
-            risks=tuple(risks),
-            tide=tide,
-            storm_surge=storm_surge,
-            waves=waves,
-        ),
-        action_error,
-    )
 
 
 def _render_source_status(stale: bool) -> None:
@@ -2656,50 +2191,35 @@ def _render_animation(
 
 
 def main() -> None:
-    """Render the application."""
+    """Render the application (CaSR-Land only for now)."""
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     st.set_page_config(
-        page_title="Geo Stream Coastal Flood Explorer",
+        page_title="Geo Stream — CaSR-Land",
         page_icon="🌊",
         layout="wide",
     )
     _initialize_state()
 
-    st.title("Geo Stream Coastal Flood Explorer")
+    st.title("Geo Stream — CaSR-Land")
     st.markdown(f"[View the Geo Stream repository on GitHub]({REPOSITORY_URL})")
     st.caption(
-        "Draw any Canadian region to automatically select an official CHS "
-        "water-level gauge inside it, or the nearest gauge when none lies "
-        "inside. ECCC coastal-flood forecast polygons remain an optional, "
-        "explicit fetch."
+        "Draw a Canadian region, then fetch ECCC CaSR-Land v2.1 reanalysis "
+        "for that exact shape. Other coastal layers (CHS gauges, ECCC flood "
+        "polygons, GDSPS/RESPS) are temporarily hidden from this UI."
     )
     st.warning(
-        "Exploratory visualization only. CHS station measurements are not "
-        "inundation maps. Official ECCC weather alerts and emergency guidance "
-        "take precedence."
-    )
-    st.caption(
-        "The ECCC archive contains recent forecasts—not observed floods, a "
-        "30-day average, or permanent hazard mapping."
+        "Exploratory visualization only. CaSR-Land is historical surface "
+        "reanalysis (through 2017-12), not a warning service, inundation map, "
+        "or live coastal forecast. Official ECCC weather alerts and emergency "
+        "guidance take precedence."
     )
 
-    chs_stations, selected_chs_station_id, chs_bundle = (
-        _render_chs_water_levels()
-    )
-    criteria, action_error = _render_sidebar()
-    if action_error:
-        st.error(action_error)
+    _render_sidebar()
 
-    clipped_data = st.session_state.get("clipped_data")
-    filtered = filter_features(clipped_data, criteria)
-    stale = _results_are_stale()
-    _render_source_status(stale)
-
-    synthetic = st.session_state.get("current_source_mode") == "synthetic"
     st.subheader("Draw your region in Canada")
     st.info(
         "The map stays focused on Canada with extra room around its edges. "
@@ -2712,21 +2232,9 @@ def main() -> None:
         "To change a region, choose the pencil or trash button, make the edit, "
         "then choose **Save**."
     )
-    st.markdown(risk_legend_html(), unsafe_allow_html=True)
-    st.caption(
-        "Blue dots are operating CHS observation stations. The larger, darker "
-        "dot is the station shown in the water-level chart; use the map layer "
-        "control to hide or show the station layer."
-    )
     base_map = build_base_map()
     drawing_layer = build_drawing_hydration_layer(
         st.session_state.get("drawings", [])
-    )
-    result_layer = build_result_layer(filtered, synthetic=synthetic)
-    chs_station_layer = build_chs_station_layer(
-        chs_stations,
-        selected_station_id=selected_chs_station_id,
-        bundle=chs_bundle,
     )
     if build_casr_overlay_layer is not None:
         casr_layer = build_casr_overlay_layer(
@@ -2737,14 +2245,10 @@ def main() -> None:
         import folium
 
         casr_layer = folium.FeatureGroup(
-            name="CaSR-Rivers (unavailable)",
+            name="CaSR-Land (unavailable)",
             control=True,
             show=False,
         )
-    gdsps_layer = build_gdsps_overlay_layer(
-        st.session_state.get("gdsps_overlay_params"),
-        enabled=bool(st.session_state.get("gdsps_enabled")),
-    )
     map_payload = st_folium(
         base_map,
         key=MAP_COMPONENT_KEY,
@@ -2753,9 +2257,6 @@ def main() -> None:
         returned_objects=MAP_RETURNED_OBJECTS,
         feature_group_to_add=[
             drawing_layer,
-            result_layer,
-            chs_station_layer,
-            gdsps_layer,
             casr_layer,
         ],
         layer_control=build_layer_control(),
@@ -2774,10 +2275,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    _render_animation(criteria, stale=stale)
-    _render_gdsps_results()
-    _render_results(filtered, stale=stale)
     _render_casr_results()
+
 
 
 if __name__ == "__main__":

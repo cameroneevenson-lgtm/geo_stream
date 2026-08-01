@@ -25,30 +25,22 @@ def _png_b64() -> str:
 def test_build_casr_overlay_adds_image_and_marker() -> None:
     group = build_casr_overlay_layer(
         {
-            "label": "CaSR-Rivers · RiverDischarge · 198001",
+            "label": "CaSR-Land · TJ_1.5m · 2017-12-31",
             "opacity": 0.5,
             "overlays": [
                 {
                     "png_b64": _png_b64(),
                     "bounds": [[44.0, -64.0], [45.0, -63.0]],
                     "point": [-63.5, 44.5],
-                    "subbasin_id": "01AA000",
+                    "subbasin_id": "20171231",
                 }
             ],
         },
         enabled=True,
     )
-    assert group.layer_name == "CaSR-Rivers · RiverDischarge · 198001"
+    assert group.layer_name == "CaSR-Land · TJ_1.5m · 2017-12-31"
     assert group.show is True
     assert len(group._children) >= 2
-
-
-def test_coastal_layers_shown_by_default() -> None:
-    """CHS and ECCC coastal results start visible; GDSPS stays opt-in."""
-
-    assert build_result_layer(None).show is True
-    assert build_chs_station_layer([]).show is True
-    assert build_gdsps_overlay_layer(None, enabled=False).show is False
 
 
 def test_disabled_casr_overlay_is_empty_group() -> None:
@@ -63,5 +55,9 @@ def test_disabled_casr_overlay_is_empty_group() -> None:
         },
         enabled=False,
     )
-    assert group.layer_name == "CaSR-Rivers"
+    assert group.layer_name == "CaSR-Land"
     assert len(group._children) == 0
+    # Library builders for hidden layers remain importable for later restore.
+    assert build_result_layer(None) is not None
+    assert build_chs_station_layer([]) is not None
+    assert build_gdsps_overlay_layer(None, enabled=False).show is False

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-
-import pytest
 from datetime import date, datetime, timedelta, timezone
 
 from streamlit.testing.v1 import AppTest
@@ -136,14 +134,6 @@ for _fake in (fake_gdsps_wms, fake_gdsps_wcs, fake_gdsps_files):
 app_module._cached_gdsps_wms_layers = fake_gdsps_wms
 app_module._cached_gdsps_wcs_coverages = fake_gdsps_wcs
 app_module._cached_gdsps_datamart_files = fake_gdsps_files
-
-original_casr_latest = app_module._cached_casr_latest_day
-
-def fake_casr_latest():
-    return "2024-12-31"
-
-fake_casr_latest.clear = lambda: None
-app_module._cached_casr_latest_day = fake_casr_latest
 {extra_setup}
 try:
     app_module.main()
@@ -154,7 +144,6 @@ finally:
     app_module._cached_gdsps_wms_layers = original_gdsps_wms
     app_module._cached_gdsps_wcs_coverages = original_gdsps_wcs
     app_module._cached_gdsps_datamart_files = original_gdsps_files
-    app_module._cached_casr_latest_day = original_casr_latest
 """
 
 
@@ -184,7 +173,6 @@ def test_archive_clipped_filename_marks_only_partial_ranges() -> None:
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_last_successful_archive_fetch_has_prominent_feedback() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
@@ -223,7 +211,6 @@ def test_last_successful_archive_fetch_has_prominent_feedback() -> None:
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_archive_fetch_action_shows_completion_status_without_network() -> None:
     extra_setup = """
 from coastal_flood_explorer.archive import ArchiveFetchResult
@@ -289,7 +276,6 @@ app_module._cached_archive_fetch = fake_fetch
     assert raw_payload["summary"]["not_loaded_date_count"] == 0
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_archive_fetch_calls_every_date_in_short_inclusive_range() -> None:
     extra_setup = """
 from coastal_flood_explorer.archive import ArchiveFetchResult
@@ -345,7 +331,6 @@ app_module._cached_archive_fetch = fake_fetch
     assert app.session_state["archive_successful_date_count"] == 3
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_systemic_archive_failure_stops_remaining_date_requests() -> None:
     extra_setup = """
 original_fetch = app_module._cached_archive_fetch
@@ -392,7 +377,6 @@ app_module._cached_archive_fetch = fake_fetch
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_archive_range_stops_after_reaching_cumulative_feature_limit() -> None:
     extra_setup = """
 from coastal_flood_explorer.archive import ArchiveFetchResult
@@ -460,7 +444,6 @@ app_module._cached_archive_fetch = fake_fetch
     assert len(app.session_state["archive_date_failures"]) == 2
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_archive_range_retains_partial_dates_and_labels_them() -> None:
     extra_setup = """
 from coastal_flood_explorer.archive import ArchiveFetchResult
@@ -519,7 +502,6 @@ app_module._cached_archive_fetch = fake_fetch
     assert raw_payload["summary"]["not_loaded_date_count"] == 1
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_all_failed_archive_range_keeps_previous_dataset() -> None:
     extra_setup = """
 original_fetch = app_module._cached_archive_fetch
@@ -593,7 +575,6 @@ app_module._cached_archive_fetch = fake_fetch
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_incomplete_archive_range_cannot_be_fetched() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
@@ -617,28 +598,24 @@ def test_incomplete_archive_range_cannot_be_fetched() -> None:
     )
 
 
-def test_initial_render_focuses_surface_water() -> None:
+def test_initial_render_explains_archive_without_fetching() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
         default_timeout=20,
     ).run()
 
     assert not list(app.exception)
-    assert any(
-        element.value == "Geo Stream — Surface Water" for element in app.title
+    range_picker = next(
+        element
+        for element in app.get("date_input")
+        if element.label == "Archived ECCC issue-date range (UTC)"
     )
-    assert any(
-        "Surface water — CHS gauges" in element.value
-        for element in app.subheader
-    )
-    assert any(
-        "Show model water surface on the map" in checkbox.label
-        for checkbox in app.checkbox
-    )
-    # CaSR precip and ECCC flood archive stay hidden.
-    labels = [button.label for button in app.button]
-    assert not any("CaSR" in label for label in labels)
-    assert not any("ECCC archive" in label for label in labels)
+    assert isinstance(range_picker.value, tuple)
+    assert len(range_picker.value) == 2
+    assert (range_picker.value[1] - range_picker.value[0]).days + 1 == 30
+    captions = [element.value for element in app.caption]
+    assert any("not a 30-day average" in value for value in captions)
+    assert any("does not contact ECCC" in value for value in captions)
 
 
 def test_initial_render_links_to_public_repository() -> None:

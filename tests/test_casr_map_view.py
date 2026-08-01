@@ -7,7 +7,12 @@ import io
 
 from PIL import Image
 
-from coastal_flood_explorer.map_view import build_casr_overlay_layer
+from coastal_flood_explorer.map_view import (
+    build_casr_overlay_layer,
+    build_chs_station_layer,
+    build_gdsps_overlay_layer,
+    build_result_layer,
+)
 
 
 def _png_b64() -> str:
@@ -34,7 +39,16 @@ def test_build_casr_overlay_adds_image_and_marker() -> None:
         enabled=True,
     )
     assert group.layer_name == "CaSR-Rivers · RiverDischarge · 198001"
+    assert group.show is True
     assert len(group._children) >= 2
+
+
+def test_non_casr_layers_hidden_by_default() -> None:
+    """ECCC results, CHS, and GDSPS start unchecked so CaSR is the hero."""
+
+    assert build_result_layer(None).show is False
+    assert build_chs_station_layer([]).show is False
+    assert build_gdsps_overlay_layer(None, enabled=False).show is False
 
 
 def test_disabled_casr_overlay_is_empty_group() -> None:

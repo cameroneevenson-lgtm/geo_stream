@@ -410,15 +410,20 @@ def build_result_layer(
     feature_collection: Mapping[str, Any] | None,
     *,
     synthetic: bool = False,
+    show: bool = False,
 ) -> folium.FeatureGroup:
-    """Build a noneditable result layer with escaped popups and tooltips."""
+    """Build a noneditable result layer with escaped popups and tooltips.
+
+    Hidden in the layer control by default so CaSR-Rivers stays the hero
+    overlay at app load; users can still enable ECCC results from the control.
+    """
 
     name = (
         "SYNTHETIC TEST DATA — NOT ECCC"
         if synthetic
         else "ECCC coastal flood risk"
     )
-    group = folium.FeatureGroup(name=name, control=True, show=True)
+    group = folium.FeatureGroup(name=name, control=True, show=show)
     SyntheticBanner(visible=synthetic).add_to(group)
     if not isinstance(feature_collection, Mapping):
         return group
@@ -684,13 +689,18 @@ def build_chs_station_layer(
     *,
     selected_station_id: str | None = None,
     bundle: CHSWaterLevelBundle | None = None,
+    show: bool = False,
 ) -> folium.FeatureGroup:
-    """Build a noneditable layer of operating CHS observation stations."""
+    """Build a noneditable layer of operating CHS observation stations.
+
+    Hidden in the layer control by default so CaSR-Rivers stays the hero
+    overlay at app load; stations remain available via the layer control.
+    """
 
     group = folium.FeatureGroup(
         name="CHS observation stations",
         control=True,
-        show=True,
+        show=show,
     )
     valid_stations = [
         station

@@ -106,8 +106,20 @@ from coastal_flood_explorer.gdsps_wms import (
     GDSPSWMSClient,
     build_wms_tile_params,
 )
+from coastal_flood_explorer.casr_common import (
+    CASR_HPFX_ROOT,
+    CASR_RIVERS_VARIABLES,
+    DEEP_RESERVOIR_STORAGE,
+    RIVER_CHANNEL_STORAGE,
+    RIVER_DISCHARGE,
+    VARIABLE_DEFINITIONS as CASR_VARIABLE_DEFINITIONS,
+    CASRError,
+)
+from coastal_flood_explorer.casr_hpfx import CASRHpfxClient
+from coastal_flood_explorer import casr_service
 from coastal_flood_explorer.map_view import (
     build_base_map,
+    build_casr_overlay_layer,
     build_chs_station_layer,
     build_drawing_hydration_layer,
     build_gdsps_overlay_layer,
@@ -133,7 +145,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 LOGGER = logging.getLogger("geo_stream.app")
 REPOSITORY_URL = "https://github.com/cameroneevenson-lgtm/geo_stream"
-MAP_COMPONENT_KEY = "coastal-flood-map-v6"
+MAP_COMPONENT_KEY = "coastal-flood-map-v7"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -158,6 +170,13 @@ STATE_DEFAULTS: dict[str, Any] = {
     "chs_bundles": {},
     "chs_selection_roi": None,
     "selected_chs_station_id": None,
+    "casr_enabled": True,
+    "casr_overlay_params": None,
+    "casr_opacity": 0.75,
+    "casr_fetch_roi": None,
+    "casr_point_series": None,
+    "casr_subset_summary": None,
+    "casr_warnings": [],
     "gdsps_enabled": False,
     "gdsps_overlay_params": None,
     "gdsps_opacity": 0.7,
@@ -287,6 +306,41 @@ def _cached_gdsps_datamart_bytes(
 
     client = GDSPSDatamartClient(root=root, base_path=base_path)
     return client.download(url)
+
+
+@st.cache_data(ttl=3600, max_entries=4, show_spinner=False)
+def _cached_casr_months(root: str) -> tuple[tuple[str, ...], str | None]:
+    """List available CaSR-Rivers YYYYMM directories, including safe failures."""
+
+    try:
+        return CASRHpfxClient(root=root).list_months(), None
+    except CASRError as exc:
+        return (), str(exc)
+
+
+@st.cache_data(ttl=3600, max_entries=16, show_spinner=False)
+def _cached_casr_files(
+    root: str,
+    year_month: str,
+    variable: str | None,
+) -> tuple[tuple[Any, ...], str | None]:
+    """List CaSR-Rivers files for one month (primitive cache key)."""
+
+    try:
+        files = CASRHpfxClient(root=root).list_files(
+            year_month,
+            variable=variable,
+        )
+        return files, None
+    except CASRError as exc:
+        return (), str(exc)
+
+
+@st.cache_data(ttl=3600, max_entries=48, show_spinner=False)
+def _cached_casr_bytes(root: str, url: str) -> bytes:
+    """Download one CaSR-Rivers NetCDF keyed by absolute URL."""
+
+    return CASRHpfxClient(root=root).download(url)
 
 
 def _gdsps_datamart_base_paths() -> tuple[str, ...]:
@@ -1078,6 +1132,250 @@ def _gdsps_fetch_numeric(
     )
 
 
+def _render_casr_controls(
+    bbox: tuple[float, float, float, float] | None,
+    active_roi: Mapping[str, Any] | None,
+) -> None:
+    """Render the hero CaSR-Rivers sidebar (CCCRIS-style variable/time picks)."""
+
+    st.header("CaSR-Rivers (hero layer)")
+    st.caption(
+        "ECCC Canadian Surface Reanalysis — Rivers v2.1 from HPFX. "
+        "Historical reanalysis for drawn sub-basins. This is not a flood "
+        "warning service and not the same product as CCCRIS coastal surge "
+        "hindcasts."
+    )
+    enabled = st.checkbox(
+        "Show CaSR-Rivers on the map",
+        key="casr_enabled",
+        help=(
+            "Default-on hero overlay. Fetching NetCDF is a separate explicit "
+            "action after you draw a region."
+        ),
+    )
+    months, months_error = _cached_casr_months(CASR_HPFX_ROOT)
+    if not months:
+        st.session_state["casr_overlay_params"] = None
+        st.info(
+            "CaSR-Rivers months are not currently listed on HPFX. The product "
+            "may be temporarily unavailable."
+        )
+        if months_error:
+            st.caption(months_error)
+        return
+
+    # Prefer a known-good early archive month when present; else newest.
+    default_month = "198001" if "198001" in months else months[-1]
+    month_index = (
+        months.index(default_month) if default_month in months else len(months) - 1
+    )
+    year_month = st.selectbox(
+        "Reanalysis month (YYYYMM)",
+        months,
+        index=month_index,
+        key="casr_selected_month",
+        help="Per-subbasin CaSR-Rivers files are published one calendar month at a time.",
+    )
+    variable = st.selectbox(
+        "Variable",
+        CASR_RIVERS_VARIABLES,
+        format_func=lambda code: {
+            RIVER_DISCHARGE: "RiverDischarge — streamflow (m³/s)",
+            RIVER_CHANNEL_STORAGE: "RiverChannelStorage — channel storage (m³)",
+            DEEP_RESERVOIR_STORAGE: (
+                "DeepReservoirStorage — lower-zone storage (kg/m²)"
+            ),
+        }.get(code, code),
+        key="casr_selected_variable",
+    )
+    st.caption(CASR_VARIABLE_DEFINITIONS[variable])
+    subbasin_override = st.text_input(
+        "Sub-basin ID (optional)",
+        key="casr_subbasin_id",
+        help=(
+            "CCCRIS-style explicit node. Leave blank to probe basins that "
+            "intersect the drawn ROI (capped)."
+        ),
+        placeholder="e.g. 01AA000",
+    )
+    opacity = st.slider(
+        "CaSR overlay opacity",
+        min_value=0.0,
+        max_value=1.0,
+        step=0.05,
+        key="casr_opacity",
+        help="Adjusting opacity never re-downloads HPFX NetCDF files.",
+    )
+
+    # Keep opacity on an existing overlay without refetching.
+    existing = st.session_state.get("casr_overlay_params")
+    if enabled and isinstance(existing, Mapping) and existing.get("overlays"):
+        updated = dict(existing)
+        updated["opacity"] = float(opacity)
+        st.session_state["casr_overlay_params"] = updated
+    elif not enabled:
+        # Keep stored overlays so re-enabling does not require a refetch, but
+        # the map builder hides them when enabled is false.
+        pass
+
+    fetch = st.button(
+        "Fetch CaSR-Rivers for ROI",
+        type="primary",
+        disabled=bbox is None or active_roi is None,
+        width="stretch",
+        help=(
+            "Draw a region first."
+            if bbox is None
+            else "Probe intersecting sub-basins and download the selected variable."
+        ),
+    )
+    if fetch and active_roi is not None:
+        _run_casr_fetch(
+            year_month,
+            variable,
+            active_roi,
+            subbasin_override.strip() or None,
+            float(opacity),
+        )
+
+    stale = bool(
+        st.session_state.get("casr_overlay_params")
+        and not roi_matches(active_roi, st.session_state.get("casr_fetch_roi"))
+    )
+    if stale:
+        st.warning(
+            "The CaSR overlay was fetched for a previous drawing. Fetch again "
+            "for the current ROI — download stays disabled until then."
+        )
+
+
+def _run_casr_fetch(
+    year_month: str,
+    variable: str,
+    active_roi: Mapping[str, Any],
+    subbasin_id: str | None,
+    opacity: float,
+) -> None:
+    status = st.status("Fetching CaSR-Rivers for the drawn region…", expanded=False)
+    try:
+        with status:
+            st.write("Listing HPFX per-subbasin files…")
+
+            def list_files(
+                month: str,
+                var: str | None,
+            ) -> tuple[Any, ...]:
+                files, error = _cached_casr_files(CASR_HPFX_ROOT, month, var)
+                if error and not files:
+                    raise CASRError(error)
+                return files
+
+            def download(file: Any) -> bytes:
+                return _cached_casr_bytes(CASR_HPFX_ROOT, file.url)
+
+            result = casr_service.fetch_for_roi(
+                year_month=year_month,
+                variable=variable,
+                roi=active_roi,
+                list_files=list_files,
+                download=download,
+                subbasin_id=subbasin_id,
+            )
+            import base64
+
+            overlays = []
+            series_frames = []
+            for subset in result.subsets:
+                overlays.append(
+                    {
+                        "png_b64": base64.b64encode(subset.overlay_png).decode(
+                            "ascii"
+                        ),
+                        "bounds": [
+                            list(subset.overlay_bounds[0]),
+                            list(subset.overlay_bounds[1]),
+                        ],
+                        "point": list(subset.point),
+                        "subbasin_id": subset.subbasin_id,
+                    }
+                )
+                frame = subset.point_series.copy()
+                frame.insert(0, "subbasin_id", subset.subbasin_id)
+                series_frames.append(frame)
+            label = (
+                f"CaSR-Rivers · {result.variable} · {result.year_month}"
+            )
+            st.session_state["casr_overlay_params"] = {
+                "label": label,
+                "opacity": opacity,
+                "overlays": overlays,
+            }
+            st.session_state["casr_fetch_roi"] = copy.deepcopy(active_roi)
+            st.session_state["casr_warnings"] = list(result.warnings)
+            for subset in result.subsets:
+                st.session_state["casr_warnings"].extend(subset.warnings)
+            if series_frames:
+                import pandas as pd
+
+                st.session_state["casr_point_series"] = pd.concat(
+                    series_frames,
+                    ignore_index=True,
+                )
+            else:
+                st.session_state["casr_point_series"] = None
+            st.session_state["casr_subset_summary"] = (
+                f"{len(result.subsets)} sub-basin(s) · {result.variable} · "
+                f"{result.year_month}"
+            )
+            status.update(label="CaSR-Rivers fetch complete.", state="complete")
+    except CASRError as exc:
+        status.update(label="CaSR-Rivers fetch failed.", state="error")
+        st.error(str(exc))
+    except Exception:
+        LOGGER.exception("Unexpected CaSR fetch failure")
+        status.update(label="CaSR-Rivers fetch failed.", state="error")
+        st.error("CaSR-Rivers data could not be fetched for this region.")
+
+
+def _render_casr_results() -> None:
+    """Show CaSR point series under the map (CCCRIS-style node chart)."""
+
+    summary = st.session_state.get("casr_subset_summary")
+    series = st.session_state.get("casr_point_series")
+    if not summary and series is None:
+        return
+    st.subheader("CaSR-Rivers")
+    if summary:
+        st.caption(summary)
+    for warning in st.session_state.get("casr_warnings") or []:
+        if isinstance(warning, str) and warning.strip():
+            st.warning(warning)
+    if series is not None:
+        st.caption(
+            "Sample-point time series nearest the ROI centroid inside each "
+            "loaded sub-basin. Historical reanalysis — not a warning product."
+        )
+        try:
+            chart_frame = series.rename(
+                columns={
+                    "time_utc": "time",
+                    "value": "CaSR value",
+                }
+            )
+            if "subbasin_id" in chart_frame.columns:
+                st.line_chart(
+                    chart_frame,
+                    x="time",
+                    y="CaSR value",
+                    color="subbasin_id",
+                )
+            else:
+                st.line_chart(chart_frame, x="time", y="CaSR value")
+        except Exception:
+            LOGGER.exception("CaSR chart rendering failed")
+            st.dataframe(series, width="stretch")
+
+
 def _render_gdsps_controls(
     bbox: tuple[float, float, float, float] | None,
     active_roi: Mapping[str, Any] | None,
@@ -1568,6 +1866,8 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
 
     with st.sidebar:
         _render_feedback_form()
+        st.divider()
+        _render_casr_controls(bbox, st.session_state.get("active_roi"))
         st.divider()
         st.header("ECCC forecast overlay")
         if bbox is None:
@@ -2381,6 +2681,10 @@ def main() -> None:
         selected_station_id=selected_chs_station_id,
         bundle=chs_bundle,
     )
+    casr_layer = build_casr_overlay_layer(
+        st.session_state.get("casr_overlay_params"),
+        enabled=bool(st.session_state.get("casr_enabled")),
+    )
     gdsps_layer = build_gdsps_overlay_layer(
         st.session_state.get("gdsps_overlay_params"),
         enabled=bool(st.session_state.get("gdsps_enabled")),
@@ -2393,6 +2697,7 @@ def main() -> None:
         returned_objects=MAP_RETURNED_OBJECTS,
         feature_group_to_add=[
             drawing_layer,
+            casr_layer,
             result_layer,
             chs_station_layer,
             gdsps_layer,
@@ -2413,6 +2718,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    _render_casr_results()
     _render_animation(criteria, stale=stale)
     _render_gdsps_results()
     _render_results(filtered, stale=stale)

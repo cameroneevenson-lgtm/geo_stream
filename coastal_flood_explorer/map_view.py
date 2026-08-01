@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import html
 import json
 import math
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import folium
@@ -509,6 +510,115 @@ def build_gdsps_overlay_layer(
         **extra,
     )
     wms.add_to(group)
+    return group
+
+
+CASR_LAYER_NAME = "CaSR-Rivers"
+
+
+def build_casr_overlay_layer(
+    params: Mapping[str, Any] | None,
+    *,
+    enabled: bool = True,
+) -> folium.FeatureGroup:
+    """Render CaSR-Rivers PNG grids + sample points as the hero overlay.
+
+    Overlay PNGs are produced in Python from NetCDF (no GeoMet WMS). Opacity
+    changes only rebuild this Folium group — they never re-download HPFX files.
+    """
+
+    overlay_label = CASR_LAYER_NAME
+    if isinstance(params, Mapping):
+        candidate = params.get("label")
+        if isinstance(candidate, str) and candidate.strip():
+            overlay_label = candidate.strip()
+    group = folium.FeatureGroup(
+        name=overlay_label,
+        control=True,
+        show=bool(enabled),
+    )
+    if not enabled or not isinstance(params, Mapping):
+        return group
+
+    try:
+        opacity_value = float(params.get("opacity", 0.75))
+    except (TypeError, ValueError):
+        opacity_value = 0.75
+    opacity_value = min(1.0, max(0.0, opacity_value))
+
+    overlays = params.get("overlays")
+    if not isinstance(overlays, Sequence) or isinstance(overlays, (str, bytes)):
+        return group
+
+    for item in overlays:
+        if not isinstance(item, Mapping):
+            continue
+        png_b64 = item.get("png_b64")
+        bounds = item.get("bounds")
+        if not isinstance(png_b64, str) or not png_b64:
+            continue
+        if (
+            not isinstance(bounds, Sequence)
+            or len(bounds) != 2
+            or not all(isinstance(corner, Sequence) and len(corner) == 2 for corner in bounds)
+        ):
+            continue
+        try:
+            south, west = float(bounds[0][0]), float(bounds[0][1])
+            north, east = float(bounds[1][0]), float(bounds[1][1])
+        except (TypeError, ValueError):
+            continue
+        # Validate base64 without raising into the map path.
+        try:
+            base64.b64decode(png_b64, validate=True)
+        except (ValueError, TypeError):
+            continue
+        image_url = f"data:image/png;base64,{png_b64}"
+        folium.raster_layers.ImageOverlay(
+            image=image_url,
+            bounds=[[south, west], [north, east]],
+            opacity=opacity_value,
+            interactive=False,
+            cross_origin=False,
+            zindex=350,
+        ).add_to(group)
+
+        point = item.get("point")
+        subbasin = item.get("subbasin_id")
+        if (
+            isinstance(point, Sequence)
+            and len(point) == 2
+            and isinstance(subbasin, str)
+        ):
+            try:
+                lon, lat = float(point[0]), float(point[1])
+            except (TypeError, ValueError):
+                continue
+            popup = (
+                "<table>"
+                "<tr><th style='text-align:left;padding:2px 8px 2px 0'>"
+                "CaSR sub-basin</th>"
+                f"<td style='padding:2px 0'>{_escaped(subbasin)}</td></tr>"
+                "<tr><th style='text-align:left;padding:2px 8px 2px 0'>"
+                "Sample point</th>"
+                f"<td style='padding:2px 0'>{_escaped(f'{lat:.4f}, {lon:.4f}')}"
+                "</td></tr>"
+                "<tr><td colspan='2' style='padding-top:4px'>"
+                "Historical CaSR-Rivers reanalysis — not a flood warning."
+                "</td></tr>"
+                "</table>"
+            )
+            folium.CircleMarker(
+                location=(lat, lon),
+                radius=6,
+                color="#0f766e",
+                weight=2,
+                fill=True,
+                fill_color="#14b8a6",
+                fill_opacity=0.95,
+                popup=folium.Popup(popup, max_width=280),
+                tooltip=_escaped(f"CaSR {subbasin}"),
+            ).add_to(group)
     return group
 
 

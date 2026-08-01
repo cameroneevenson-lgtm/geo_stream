@@ -178,7 +178,7 @@ def month_directory_name(year_month: str) -> str | None:
 
 
 def lon_to_wgs84(lon: float) -> float:
-    """Convert 0–360 longitudes to the ``[-180, 180]`` range Folium expects."""
+    """Convert 0-360 longitudes to the ``[-180, 180]`` range Folium expects."""
 
     value = float(lon)
     if value > 180.0:

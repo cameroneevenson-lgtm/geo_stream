@@ -35,7 +35,7 @@ CASR_RIVERS_VARIABLES: tuple[str, ...] = (
     DEEP_RESERVOIR_STORAGE,
 )
 
-# Filename product token → NetCDF data-variable name (verified on live samples).
+# Filename product token -> NetCDF data-variable name (verified on live samples).
 VARIABLE_NETCDF_NAMES: dict[str, str] = {
     RIVER_DISCHARGE: "disc",
     RIVER_CHANNEL_STORAGE: "stor",
@@ -45,20 +45,20 @@ VARIABLE_NETCDF_NAMES: dict[str, str] = {
 VARIABLE_DEFINITIONS: dict[str, str] = {
     RIVER_DISCHARGE: (
         "Mean streamflow discharge exiting the river channel over the hour "
-        "ending at the indicated time (m³/s). Historical reanalysis — not a "
+        "ending at the indicated time (m^3/s). Historical reanalysis - not a "
         "live forecast or flood warning."
     ),
     RIVER_CHANNEL_STORAGE: (
-        "Water stored in the river channel (m³). Historical reanalysis — not "
+        "Water stored in the river channel (m^3). Historical reanalysis - not "
         "a live forecast or flood warning."
     ),
     DEEP_RESERVOIR_STORAGE: (
-        "Lower-zone / deep reservoir storage depth (kg/m²). Historical "
-        "reanalysis — not a live forecast or flood warning."
+        "Lower-zone / deep reservoir storage depth (kg/m^2). Historical "
+        "reanalysis - not a live forecast or flood warning."
     ),
 }
 
-# Smallest product — used only to probe basin bounding boxes cheaply.
+# Smallest product - used only to probe basin bounding boxes cheaply.
 PROBE_VARIABLE = DEEP_RESERVOIR_STORAGE
 
 _FILENAME = re.compile(

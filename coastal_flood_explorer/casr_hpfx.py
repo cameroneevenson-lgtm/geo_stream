@@ -2,7 +2,7 @@
 
 The collaborative host publishes Apache directory listings and static NetCDF.
 This client is HTTPS-only, follows no redirects, allowlists same-directory
-filenames, and enforces response media-type and size ceilings — the same
+filenames, and enforces response media-type and size ceilings - the same
 spirit as ``archive.py`` / ``gdsps_datamart.py``.
 """
 
@@ -137,7 +137,7 @@ class CASRHpfxClient:
             )
         self._assert_same_origin(url)
         try:
-            # Per-subbasin discharge files are ~10–30 MB; allow a longer read.
+            # Per-subbasin discharge files are ~10-30 MB; allow a longer read.
             response = self.session.get(
                 url,
                 timeout=(5.0, 120.0),

@@ -9,4 +9,5 @@ pandas>=2.2,<4
 numpy>=1.26,<3
 xarray>=2024.1,<2026
 netCDF4>=1.6,<2
+Pillow>=10,<12
 pytest>=8,<10

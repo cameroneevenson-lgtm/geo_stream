@@ -6,12 +6,21 @@ import copy
 import hashlib
 import json
 import logging
+import sys
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
+
+# Streamlit Community Cloud runs app.py from /mount/src/<repo>. Ensure the
+# repo root stays on sys.path before local package imports (also covers hosts
+# that put only the parent of the repo on the path).
+_APP_DIR = Path(__file__).resolve().parent
+_app_dir_str = str(_APP_DIR)
+if _app_dir_str not in sys.path:
+    sys.path.insert(0, _app_dir_str)
 
 import streamlit as st
 from streamlit_folium import st_folium
@@ -106,24 +115,8 @@ from coastal_flood_explorer.gdsps_wms import (
     GDSPSWMSClient,
     build_wms_tile_params,
 )
-from coastal_flood_explorer.casr_common import (
-    CASR_HPFX_ROOT,
-    CASR_RIVERS_DEFAULT,
-    CASR_RIVERS_END,
-    CASR_RIVERS_START,
-    CASR_RIVERS_VARIABLES,
-    DEEP_RESERVOIR_STORAGE,
-    RIVER_CHANNEL_STORAGE,
-    RIVER_DISCHARGE,
-    VARIABLE_DEFINITIONS as CASR_VARIABLE_DEFINITIONS,
-    CASRError,
-    parse_month_token,
-)
-from coastal_flood_explorer.casr_hpfx import CASRHpfxClient
-from coastal_flood_explorer import casr_service
 from coastal_flood_explorer.map_view import (
     build_base_map,
-    build_casr_overlay_layer,
     build_chs_station_layer,
     build_drawing_hydration_layer,
     build_gdsps_overlay_layer,
@@ -131,6 +124,61 @@ from coastal_flood_explorer.map_view import (
     build_result_layer,
     risk_legend_html,
 )
+
+# CaSR is optional at import time so a Cloud-only import failure cannot blank
+# the whole map. The real exception text is kept for the sidebar (Streamlit
+# Cloud redacts it from the main crash screen).
+try:
+    from coastal_flood_explorer.casr_common import (
+        CASR_HPFX_ROOT,
+        CASR_RIVERS_DEFAULT,
+        CASR_RIVERS_END,
+        CASR_RIVERS_START,
+        CASR_RIVERS_VARIABLES,
+        DEEP_RESERVOIR_STORAGE,
+        RIVER_CHANNEL_STORAGE,
+        RIVER_DISCHARGE,
+        VARIABLE_DEFINITIONS as CASR_VARIABLE_DEFINITIONS,
+        CASRError,
+        parse_month_token,
+    )
+    from coastal_flood_explorer.casr_hpfx import CASRHpfxClient
+    from coastal_flood_explorer import casr_service
+    from coastal_flood_explorer.map_view import build_casr_overlay_layer
+
+    _CASR_IMPORT_ERROR: str | None = None
+except ImportError as exc:
+    CASR_HPFX_ROOT = "https://hpfx.collab.science.gc.ca"
+    CASR_RIVERS_DEFAULT = date(2017, 12, 1)
+    CASR_RIVERS_END = date(2017, 12, 31)
+    CASR_RIVERS_START = date(1980, 1, 1)
+    CASR_RIVERS_VARIABLES = (
+        "RiverDischarge",
+        "RiverChannelStorage",
+        "DeepReservoirStorage",
+    )
+    DEEP_RESERVOIR_STORAGE = "DeepReservoirStorage"
+    RIVER_CHANNEL_STORAGE = "RiverChannelStorage"
+    RIVER_DISCHARGE = "RiverDischarge"
+    CASR_VARIABLE_DEFINITIONS = {
+        name: "CaSR-Rivers variable." for name in CASR_RIVERS_VARIABLES
+    }
+
+    class CASRError(RuntimeError):
+        """Fallback when the CaSR package failed to import."""
+
+    def parse_month_token(value: date | str) -> str:
+        if isinstance(value, date):
+            return f"{value.year:04d}{value.month:02d}"
+        return str(value)
+
+    CASRHpfxClient = None  # type: ignore[assignment,misc]
+    casr_service = None  # type: ignore[assignment]
+    build_casr_overlay_layer = None  # type: ignore[assignment]
+    _CASR_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
+    logging.getLogger("geo_stream.app").exception(
+        "CaSR modules failed to import; map will load without CaSR"
+    )
 from coastal_flood_explorer.properties import (
     CONTRIBUTOR_VALUES,
     RISK_LEVELS,
@@ -1139,6 +1187,13 @@ def _render_casr_controls(
         "warning service and not the same product as CCCRIS coastal surge "
         "hindcasts."
     )
+    if _CASR_IMPORT_ERROR:
+        st.error(
+            "CaSR-Rivers could not be loaded in this deployment, so the hero "
+            "layer is unavailable. Other map tools still work. Import error: "
+            f"{_CASR_IMPORT_ERROR}"
+        )
+        return
     enabled = st.checkbox(
         "Show CaSR-Rivers on the map",
         key="casr_enabled",
@@ -2674,10 +2729,19 @@ def main() -> None:
         selected_station_id=selected_chs_station_id,
         bundle=chs_bundle,
     )
-    casr_layer = build_casr_overlay_layer(
-        st.session_state.get("casr_overlay_params"),
-        enabled=bool(st.session_state.get("casr_enabled")),
-    )
+    if build_casr_overlay_layer is not None:
+        casr_layer = build_casr_overlay_layer(
+            st.session_state.get("casr_overlay_params"),
+            enabled=bool(st.session_state.get("casr_enabled")),
+        )
+    else:
+        import folium
+
+        casr_layer = folium.FeatureGroup(
+            name="CaSR-Rivers (unavailable)",
+            control=True,
+            show=False,
+        )
     gdsps_layer = build_gdsps_overlay_layer(
         st.session_state.get("gdsps_overlay_params"),
         enabled=bool(st.session_state.get("gdsps_enabled")),

@@ -7,6 +7,8 @@ from datetime import date
 import pytest
 
 from coastal_flood_explorer.casr_common import (
+    CASR_RIVERS_END,
+    CASR_RIVERS_START,
     CASRConfigurationError,
     bbox_intersects,
     lon_to_wgs84,
@@ -40,3 +42,9 @@ def test_parse_month_token_and_lon() -> None:
     assert parse_month_token("198012") == "198012"
     assert lon_to_wgs84(289.6) == pytest.approx(-70.4)
     assert bbox_intersects((-64.0, 44.0, -63.0, 45.0), (-63.5, 44.5, -62.0, 46.0))
+
+
+def test_published_rivers_window_is_usable_offline() -> None:
+    assert CASR_RIVERS_START <= CASR_RIVERS_END
+    assert parse_month_token(CASR_RIVERS_START) == "198001"
+    assert parse_month_token(CASR_RIVERS_END) == "201712"

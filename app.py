@@ -108,12 +108,15 @@ from coastal_flood_explorer.gdsps_wms import (
 )
 from coastal_flood_explorer.casr_common import (
     CASR_HPFX_ROOT,
+    CASR_RIVERS_END,
+    CASR_RIVERS_START,
     CASR_RIVERS_VARIABLES,
     DEEP_RESERVOIR_STORAGE,
     RIVER_CHANNEL_STORAGE,
     RIVER_DISCHARGE,
     VARIABLE_DEFINITIONS as CASR_VARIABLE_DEFINITIONS,
     CASRError,
+    parse_month_token,
 )
 from coastal_flood_explorer.casr_hpfx import CASRHpfxClient
 from coastal_flood_explorer import casr_service
@@ -306,16 +309,6 @@ def _cached_gdsps_datamart_bytes(
 
     client = GDSPSDatamartClient(root=root, base_path=base_path)
     return client.download(url)
-
-
-@st.cache_data(ttl=3600, max_entries=4, show_spinner=False)
-def _cached_casr_months(root: str) -> tuple[tuple[str, ...], str | None]:
-    """List available CaSR-Rivers YYYYMM directories, including safe failures."""
-
-    try:
-        return CASRHpfxClient(root=root).list_months(), None
-    except CASRError as exc:
-        return (), str(exc)
 
 
 @st.cache_data(ttl=3600, max_entries=16, show_spinner=False)
@@ -1153,29 +1146,27 @@ def _render_casr_controls(
             "action after you draw a region."
         ),
     )
-    months, months_error = _cached_casr_months(CASR_HPFX_ROOT)
-    if not months:
-        st.session_state["casr_overlay_params"] = None
-        st.info(
-            "CaSR-Rivers months are not currently listed on HPFX. The product "
-            "may be temporarily unavailable."
-        )
-        if months_error:
-            st.caption(months_error)
-        return
-
-    # Prefer a known-good early archive month when present; else newest.
-    default_month = "198001" if "198001" in months else months[-1]
-    month_index = (
-        months.index(default_month) if default_month in months else len(months) - 1
+    # Month is chosen offline from the published CaSR-Rivers window. Listing
+    # hundreds of HPFX directories here blocked the Streamlit run before the map
+    # could render (15s+ on a good link; minutes with retries when HPFX is
+    # slow). Network contact stays on the explicit Fetch button.
+    month_value = st.date_input(
+        "Reanalysis month",
+        value=CASR_RIVERS_START,
+        min_value=CASR_RIVERS_START,
+        max_value=CASR_RIVERS_END,
+        key="casr_selected_month_date",
+        help=(
+            "CaSR-Rivers v2.1 per-subbasin files are one calendar month each "
+            f"({CASR_RIVERS_START:%Y-%m} to {CASR_RIVERS_END:%Y-%m}). Day is "
+            "ignored; the whole month is fetched."
+        ),
     )
-    year_month = st.selectbox(
-        "Reanalysis month (YYYYMM)",
-        months,
-        index=month_index,
-        key="casr_selected_month",
-        help="Per-subbasin CaSR-Rivers files are published one calendar month at a time.",
-    )
+    if isinstance(month_value, tuple):
+        month_value = month_value[0] if month_value else CASR_RIVERS_START
+    if not isinstance(month_value, date):
+        month_value = CASR_RIVERS_START
+    year_month = parse_month_token(month_value)
     variable = st.selectbox(
         "Variable",
         CASR_RIVERS_VARIABLES,

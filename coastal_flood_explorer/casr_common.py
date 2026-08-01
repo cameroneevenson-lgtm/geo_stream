@@ -17,6 +17,12 @@ from .api import ECCCError
 CASR_HPFX_ROOT = "https://hpfx.collab.science.gc.ca"
 CASR_RIVERS_BASE_PATH = "/~scar700/rcas-casr/data/CaSR-Rivers_v2.1/per_subbasin/"
 
+# Published CaSR-Rivers v2.1 per-subbasin window (verified against the live
+# HPFX listing). Used for offline month pickers so the Streamlit sidebar never
+# blocks map render on a directory crawl.
+CASR_RIVERS_START = date(1980, 1, 1)
+CASR_RIVERS_END = date(2017, 12, 31)
+
 RIVER_DISCHARGE = "RiverDischarge"
 RIVER_CHANNEL_STORAGE = "RiverChannelStorage"
 DEEP_RESERVOIR_STORAGE = "DeepReservoirStorage"

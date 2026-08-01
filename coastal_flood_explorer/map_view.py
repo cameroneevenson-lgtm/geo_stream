@@ -518,7 +518,7 @@ def build_gdsps_overlay_layer(
     return group
 
 
-CASR_LAYER_NAME = "CaSR-Land"
+CASR_LAYER_NAME = "CaSR v3.2"
 
 
 def build_casr_overlay_layer(
@@ -526,10 +526,10 @@ def build_casr_overlay_layer(
     *,
     enabled: bool = True,
 ) -> folium.FeatureGroup:
-    """Render CaSR-Land PNG grids + sample points as the map overlay.
+    """Render CaSR v3.2 PNG grids + sample points as the map overlay.
 
     Overlay PNGs are produced in Python from NetCDF (no GeoMet WMS). Opacity
-    changes only rebuild this Folium group — they never re-download HPFX files.
+    changes only rebuild this Folium group — they never re-contact PAVICS.
     """
 
     overlay_label = CASR_LAYER_NAME

@@ -136,6 +136,14 @@ for _fake in (fake_gdsps_wms, fake_gdsps_wcs, fake_gdsps_files):
 app_module._cached_gdsps_wms_layers = fake_gdsps_wms
 app_module._cached_gdsps_wcs_coverages = fake_gdsps_wcs
 app_module._cached_gdsps_datamart_files = fake_gdsps_files
+
+original_casr_latest = app_module._cached_casr_latest_day
+
+def fake_casr_latest(url):
+    return "2024-12-31"
+
+fake_casr_latest.clear = lambda: None
+app_module._cached_casr_latest_day = fake_casr_latest
 {extra_setup}
 try:
     app_module.main()
@@ -146,6 +154,7 @@ finally:
     app_module._cached_gdsps_wms_layers = original_gdsps_wms
     app_module._cached_gdsps_wcs_coverages = original_gdsps_wcs
     app_module._cached_gdsps_datamart_files = original_gdsps_files
+    app_module._cached_casr_latest_day = original_casr_latest
 """
 
 
@@ -608,7 +617,7 @@ def test_incomplete_archive_range_cannot_be_fetched() -> None:
     )
 
 
-def test_initial_render_explains_casr_land_without_fetching() -> None:
+def test_initial_render_explains_casr_v32_without_date_picker() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
         default_timeout=20,
@@ -616,19 +625,23 @@ def test_initial_render_explains_casr_land_without_fetching() -> None:
 
     assert not list(app.exception)
     assert any(
-        element.value == "Geo Stream — CaSR-Land" for element in app.title
+        element.value == "Geo Stream — CaSR v3.2" for element in app.title
     )
-    day_picker = next(
-        element
+    assert any(
+        "Latest available PAVICS day: **2024-12-31**" in element.value
+        for element in app.info
+    )
+    # Date selector is abstracted out for now.
+    assert not any(
+        element.label == "Reanalysis day (UTC)"
         for element in app.get("date_input")
-        if element.label == "Reanalysis day (UTC)"
-    )
-    assert day_picker.value.isoformat() == "2017-12-31"
-    assert any(
-        button.label == "Fetch CaSR-Land for ROI" for button in app.button
     )
     assert any(
-        "Show CaSR-Land on the map" in checkbox.label
+        button.label == "Fetch latest CaSR v3.2 for ROI"
+        for button in app.button
+    )
+    assert any(
+        "Show CaSR v3.2 on the map" in checkbox.label
         for checkbox in app.checkbox
     )
     # Hidden layers must not appear in the Streamlit UI.

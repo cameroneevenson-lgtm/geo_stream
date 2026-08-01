@@ -25,20 +25,20 @@ def _png_b64() -> str:
 def test_build_casr_overlay_adds_image_and_marker() -> None:
     group = build_casr_overlay_layer(
         {
-            "label": "CaSR-Land · TJ_1.5m · 2017-12-31",
+            "label": "CaSR v3.2 · tas · 2024-12-31",
             "opacity": 0.5,
             "overlays": [
                 {
                     "png_b64": _png_b64(),
                     "bounds": [[44.0, -64.0], [45.0, -63.0]],
                     "point": [-63.5, 44.5],
-                    "subbasin_id": "20171231",
+                    "subbasin_id": "20241231",
                 }
             ],
         },
         enabled=True,
     )
-    assert group.layer_name == "CaSR-Land · TJ_1.5m · 2017-12-31"
+    assert group.layer_name == "CaSR v3.2 · tas · 2024-12-31"
     assert group.show is True
     assert len(group._children) >= 2
 
@@ -55,7 +55,7 @@ def test_disabled_casr_overlay_is_empty_group() -> None:
         },
         enabled=False,
     )
-    assert group.layer_name == "CaSR-Land"
+    assert group.layer_name == "CaSR v3.2"
     assert len(group._children) == 0
     # Library builders for hidden layers remain importable for later restore.
     assert build_result_layer(None) is not None

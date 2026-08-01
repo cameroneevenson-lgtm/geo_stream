@@ -189,7 +189,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 LOGGER = logging.getLogger("geo_stream.app")
 REPOSITORY_URL = "https://github.com/cameroneevenson-lgtm/geo_stream"
-MAP_COMPONENT_KEY = "coastal-flood-map-v11"
+MAP_COMPONENT_KEY = "coastal-flood-map-v12"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -214,14 +214,14 @@ STATE_DEFAULTS: dict[str, Any] = {
     "chs_bundles": {},
     "chs_selection_roi": None,
     "selected_chs_station_id": None,
-    "casr_enabled": True,
+    "casr_enabled": False,
     "casr_overlay_params": None,
     "casr_opacity": 0.75,
     "casr_fetch_roi": None,
     "casr_point_series": None,
     "casr_subset_summary": None,
     "casr_warnings": [],
-    "gdsps_enabled": False,
+    "gdsps_enabled": True,
     "gdsps_overlay_params": None,
     "gdsps_opacity": 0.7,
     "gdsps_export_bytes": None,
@@ -879,11 +879,11 @@ def _render_chs_water_levels(
     with st.container(border=True):
         heading_columns = st.columns([3, 1.5])
         with heading_columns[0]:
-            st.subheader("CHS station water levels")
+            st.subheader("Surface water — CHS gauges")
             st.caption(
-                "Official CHS observations load automatically. A drawing "
-                "selects a gauge inside the exact ROI, or the nearest gauge "
-                "when none lies inside."
+                "Official CHS water-surface observations and tide predictions. "
+                "A drawing selects a gauge inside the exact ROI, or the "
+                "nearest gauge when none lies inside."
             )
         refresh = heading_columns[1].button(
             "Refresh CHS",
@@ -1388,15 +1388,14 @@ def _render_gdsps_controls(
     """Render the GDSPS storm-surge sidebar section and set overlay state."""
 
     st.divider()
-    st.header("Coastal storm surge (GDSPS / RESPS)")
+    st.header("Model surface water (GDSPS / RESPS)")
     st.caption(
-        "ECCC coastal storm-surge models. ETAS is storm-surge elevation; SSH is "
-        "total water level (not an engineering or chart datum). The two "
-        "variables are never interchanged, and GDSPS (deterministic) is never "
-        "mixed with RESPS (ensemble)."
+        "ECCC coastal water-surface models. SSH is total water level "
+        "(not a chart datum); ETAS is storm-surge elevation only. The two "
+        "are never interchanged, and GDSPS is never mixed with RESPS."
     )
     enabled = st.checkbox(
-        "Enable storm-surge overlay",
+        "Show model water surface on the map",
         key="gdsps_enabled",
         help=(
             "Overlays the selected GeoMet WMS storm-surge layer on the map. The "
@@ -1460,15 +1459,25 @@ def _render_gdsps_controls(
         st.info(f"No storm-surge variables are currently advertised for {model}.")
         return
 
+    if (
+        "gdsps_selected_variable" not in st.session_state
+        and "SSH" in variable_options
+    ):
+        st.session_state["gdsps_selected_variable"] = "SSH"
     variable = st.selectbox(
-        "Variable",
+        "What to map",
         variable_options,
         format_func=lambda code: (
-            f"{code} — storm-surge elevation"
-            if code == "ETAS"
-            else f"{code} — total water level"
+            "Total water level (SSH)"
+            if code == "SSH"
+            else "Storm-surge elevation (ETAS)"
         ),
         key="gdsps_selected_variable",
+        help=(
+            "SSH is total water surface level from the model (not a chart "
+            "datum). ETAS is the surge component only — never substituted "
+            "for SSH."
+        ),
     )
 
     member: int | None = None
@@ -1865,13 +1874,12 @@ def _render_feedback_form() -> None:
 
 
 def _render_sidebar() -> None:
-    """Render the sidebar — CaSR v3.2 only; other layers are hidden for now."""
+    """Render the sidebar — surface water (GDSPS); CaSR/flood archive hidden."""
 
     bbox = _current_bbox()
     with st.sidebar:
         _render_feedback_form()
-        st.divider()
-        _render_casr_controls(bbox, st.session_state.get("active_roi"))
+        _render_gdsps_controls(bbox, st.session_state.get("active_roi"))
 
 
 def _render_source_status(stale: bool) -> None:
@@ -2193,32 +2201,35 @@ def _render_animation(
 
 
 def main() -> None:
-    """Render the application (CaSR v3.2 only for now)."""
+    """Render the application — surface water (CHS + GDSPS)."""
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     st.set_page_config(
-        page_title="Geo Stream — CaSR v3.2",
+        page_title="Geo Stream — Surface Water",
         page_icon="🌊",
         layout="wide",
     )
     _initialize_state()
 
-    st.title("Geo Stream — CaSR v3.2")
+    st.title("Geo Stream — Surface Water")
     st.markdown(f"[View the Geo Stream repository on GitHub]({REPOSITORY_URL})")
     st.caption(
-        "Draw a Canadian region, then fetch the latest native ECCC CaSR v3.2 "
-        "day from HPFX for that exact shape. CaSR is precip/snow reanalysis — "
-        "not coastal water levels. Other layers are temporarily hidden."
+        "Draw a Canadian coastal region to load the CHS water-surface gauge "
+        "inside it (or the nearest gauge). Optionally overlay ECCC GDSPS/RESPS "
+        "model total water level (SSH) or storm-surge elevation (ETAS)."
     )
     st.warning(
-        "Exploratory visualization only. CaSR v3.2 does not provide water "
-        "levels, tides, or storm surge. Official ECCC weather alerts and "
-        "emergency guidance take precedence."
+        "Exploratory visualization only. Point gauges are not inundation maps. "
+        "Model SSH is not a chart or engineering datum. Official ECCC weather "
+        "alerts and emergency guidance take precedence."
     )
 
+    chs_stations, selected_chs_station_id, chs_bundle = (
+        _render_chs_water_levels()
+    )
     _render_sidebar()
 
     st.subheader("Draw your region in Canada")
@@ -2233,23 +2244,23 @@ def main() -> None:
         "To change a region, choose the pencil or trash button, make the edit, "
         "then choose **Save**."
     )
+    st.caption(
+        "Blue dots are operating CHS observation stations. The larger, darker "
+        "dot is the station shown in the water-level chart."
+    )
     base_map = build_base_map()
     drawing_layer = build_drawing_hydration_layer(
         st.session_state.get("drawings", [])
     )
-    if build_casr_overlay_layer is not None:
-        casr_layer = build_casr_overlay_layer(
-            st.session_state.get("casr_overlay_params"),
-            enabled=bool(st.session_state.get("casr_enabled")),
-        )
-    else:
-        import folium
-
-        casr_layer = folium.FeatureGroup(
-            name="CaSR v3.2 (unavailable)",
-            control=True,
-            show=False,
-        )
+    chs_station_layer = build_chs_station_layer(
+        chs_stations,
+        selected_station_id=selected_chs_station_id,
+        bundle=chs_bundle,
+    )
+    gdsps_layer = build_gdsps_overlay_layer(
+        st.session_state.get("gdsps_overlay_params"),
+        enabled=bool(st.session_state.get("gdsps_enabled")),
+    )
     map_payload = st_folium(
         base_map,
         key=MAP_COMPONENT_KEY,
@@ -2258,7 +2269,8 @@ def main() -> None:
         returned_objects=MAP_RETURNED_OBJECTS,
         feature_group_to_add=[
             drawing_layer,
-            casr_layer,
+            chs_station_layer,
+            gdsps_layer,
         ],
         layer_control=build_layer_control(),
         on_change=_sync_map_drawings,
@@ -2276,8 +2288,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    _render_casr_results()
-
+    _render_gdsps_results()
 
 
 if __name__ == "__main__":

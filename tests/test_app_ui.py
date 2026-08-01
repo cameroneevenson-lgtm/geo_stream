@@ -617,7 +617,7 @@ def test_incomplete_archive_range_cannot_be_fetched() -> None:
     )
 
 
-def test_initial_render_explains_casr_v32_without_date_picker() -> None:
+def test_initial_render_focuses_surface_water() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
         default_timeout=20,
@@ -625,40 +625,20 @@ def test_initial_render_explains_casr_v32_without_date_picker() -> None:
 
     assert not list(app.exception)
     assert any(
-        element.value == "Geo Stream — CaSR v3.2" for element in app.title
+        element.value == "Geo Stream — Surface Water" for element in app.title
     )
     assert any(
-        "Latest available CaSR day: **2024-12-31**" in element.value
-        for element in app.info
-    )
-    # Date selector is abstracted out for now.
-    assert not any(
-        element.label == "Reanalysis day (UTC)"
-        for element in app.get("date_input")
+        "Surface water — CHS gauges" in element.value
+        for element in app.subheader
     )
     assert any(
-        button.label == "Fetch latest CaSR v3.2 for ROI"
-        for button in app.button
-    )
-    assert any(
-        "Show CaSR v3.2 on the map" in checkbox.label
+        "Show model water surface on the map" in checkbox.label
         for checkbox in app.checkbox
     )
-    assert any(
-        element.label == "What to map" for element in app.selectbox
-    )
-    assert any(
-        "Not coastal water level" in element.value
-        for element in app.caption
-    )
-    # Hidden layers must not appear in the Streamlit UI.
+    # CaSR precip and ECCC flood archive stay hidden.
     labels = [button.label for button in app.button]
+    assert not any("CaSR" in label for label in labels)
     assert not any("ECCC archive" in label for label in labels)
-    assert not any("GDSPS" in label for label in labels)
-    assert not any(
-        "Storm-surge content is not currently advertised" in element.value
-        for element in app.info
-    )
 
 
 def test_initial_render_links_to_public_repository() -> None:
@@ -864,7 +844,6 @@ app_module.st_folium = fake_st_folium
     assert app.session_state["active_roi"] == replacement
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_initial_render_loads_default_chs_water_levels_without_roi() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
@@ -896,7 +875,6 @@ def test_initial_render_loads_default_chs_water_levels_without_roi() -> None:
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_observation_age_uses_current_time_not_rounded_query_anchor() -> None:
     extra_setup = """
 original_utc_now = app_module._utc_now
@@ -918,7 +896,6 @@ app_module._utc_now = lambda: app_module.datetime(
     assert metric_values["Observation age"] == "29 min"
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_drawing_automatically_selects_station_inside_exact_roi() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
@@ -938,7 +915,6 @@ def test_drawing_automatically_selects_station_inside_exact_roi() -> None:
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_drawing_without_station_uses_nearest_and_reports_distance() -> None:
     small_halifax_roi = {
         "type": "Feature",
@@ -975,7 +951,6 @@ def test_drawing_without_station_uses_nearest_and_reports_distance() -> None:
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_failed_roi_station_keeps_explicitly_labelled_fallback_data() -> None:
     extra_setup = """
 successful_bundle = fake_bundle
@@ -1017,7 +992,6 @@ app_module._cached_chs_bundle = selective_bundle
     assert metric_values["Latest observation"] == "1.234 m"
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_manual_station_without_roi_is_not_called_the_default() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
@@ -1043,7 +1017,6 @@ def test_manual_station_without_roi_is_not_called_the_default() -> None:
     )
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_gdsps_section_shows_unavailable_when_nothing_discovered() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),
@@ -1059,7 +1032,6 @@ def test_gdsps_section_shows_unavailable_when_nothing_discovered() -> None:
     assert app.session_state["gdsps_overlay_params"] is None
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_gdsps_overlay_params_set_when_layer_discovered_and_enabled() -> None:
     setup = """
 from datetime import datetime, timezone
@@ -1090,7 +1062,6 @@ app_module.st.session_state["gdsps_enabled"] = True
     assert params["variable"] == "ETAS"
 
 
-@pytest.mark.skip(reason="CHS/ECCC/GDSPS UI temporarily hidden; CaSR-Land only")
 def test_gdsps_download_absent_before_fetch() -> None:
     app = AppTest.from_string(
         _app_with_fake_chs(),

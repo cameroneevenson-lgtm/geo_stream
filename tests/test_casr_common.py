@@ -46,6 +46,7 @@ def test_parse_month_token_and_lon() -> None:
 
 
 def test_published_rivers_window_is_usable_offline() -> None:
-    assert CASR_RIVERS_START <= CASR_RIVERS_END
+    assert CASR_RIVERS_START <= CASR_RIVERS_DEFAULT <= CASR_RIVERS_END
     assert parse_month_token(CASR_RIVERS_START) == "198001"
+    assert parse_month_token(CASR_RIVERS_DEFAULT) == "201712"
     assert parse_month_token(CASR_RIVERS_END) == "201712"

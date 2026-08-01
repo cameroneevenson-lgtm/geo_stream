@@ -1153,20 +1153,21 @@ def _render_casr_controls(
     # slow). Network contact stays on the explicit Fetch button.
     month_value = st.date_input(
         "Reanalysis month",
-        value=CASR_RIVERS_START,
+        value=CASR_RIVERS_DEFAULT,
         min_value=CASR_RIVERS_START,
         max_value=CASR_RIVERS_END,
         key="casr_selected_month_date",
         help=(
             "CaSR-Rivers v2.1 per-subbasin files are one calendar month each "
-            f"({CASR_RIVERS_START:%Y-%m} to {CASR_RIVERS_END:%Y-%m}). Day is "
-            "ignored; the whole month is fetched."
+            f"({CASR_RIVERS_START:%Y-%m} to {CASR_RIVERS_END:%Y-%m}). Defaults "
+            f"to the latest published month ({CASR_RIVERS_DEFAULT:%Y-%m}). "
+            "Day is ignored; the whole month is fetched."
         ),
     )
     if isinstance(month_value, tuple):
-        month_value = month_value[0] if month_value else CASR_RIVERS_START
+        month_value = month_value[0] if month_value else CASR_RIVERS_DEFAULT
     if not isinstance(month_value, date):
-        month_value = CASR_RIVERS_START
+        month_value = CASR_RIVERS_DEFAULT
     year_month = parse_month_token(month_value)
     variable = st.selectbox(
         "Variable",

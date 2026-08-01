@@ -63,25 +63,51 @@ CASR_PAVICS_VARIABLES: tuple[str, ...] = (
 )
 
 PAVICS_VARIABLE_DEFINITIONS: dict[str, str] = {
-    PAVICS_TAS: "Daily mean 1.5 m air temperature (shown in deg_C).",
-    PAVICS_TASMAX: "Daily max 1.5 m air temperature (shown in deg_C).",
-    PAVICS_TASMIN: "Daily min 1.5 m air temperature (shown in deg_C).",
-    PAVICS_TDPS: "Daily mean 1.5 m dew-point temperature (shown in deg_C).",
-    PAVICS_PR: "Precipitation flux (kg m-2 s-1). CaSR v3.2 reanalysis.",
-    PAVICS_SNW: "Surface snow amount / SWE (kg m-2). CaSR v3.2 reanalysis.",
-    PAVICS_SFCWIND: "Near-surface (10 m) wind speed (m s-1).",
-    PAVICS_PSL: "Sea-level pressure (Pa). CaSR v3.2 reanalysis.",
+    PAVICS_TAS: (
+        "How warm the air was, on average that day, about 1.5 m above the "
+        "ground (°C). Same idea as a daily mean thermometer reading."
+    ),
+    PAVICS_TASMAX: (
+        "The warmest air temperature that day about 1.5 m above the ground "
+        "(°C). Useful for heat extremes."
+    ),
+    PAVICS_TASMIN: (
+        "The coldest air temperature that day about 1.5 m above the ground "
+        "(°C). Useful for frost and cold nights."
+    ),
+    PAVICS_TDPS: (
+        "Dew-point temperature about 1.5 m above the ground (°C). Higher "
+        "values mean more moisture in the air (how muggy it feels), not the "
+        "air temperature itself."
+    ),
+    PAVICS_PR: (
+        "How much rain/snow fell that day, shown as millimetres of water "
+        "(mm/day). Includes liquid and frozen precipitation from the "
+        "reanalysis."
+    ),
+    PAVICS_SNW: (
+        "Snow already on the ground, as snow water equivalent (mm of water "
+        "if that snow melted). Not the snowfall that day."
+    ),
+    PAVICS_SFCWIND: (
+        "Wind speed about 10 m above the ground (m/s). Multiply by ~3.6 for "
+        "km/h (e.g. 10 m/s ≈ 36 km/h)."
+    ),
+    PAVICS_PSL: (
+        "Air pressure reduced to sea level (hPa / millibars). Lower values "
+        "often track stormier weather; typical values are near 1000–1020 hPa."
+    ),
 }
 
 PAVICS_VARIABLE_LABELS: dict[str, str] = {
-    PAVICS_TAS: "tas — 1.5 m air temperature",
-    PAVICS_TASMAX: "tasmax — daily max 1.5 m temperature",
-    PAVICS_TASMIN: "tasmin — daily min 1.5 m temperature",
-    PAVICS_TDPS: "tdps — 1.5 m dew point",
-    PAVICS_PR: "pr — precipitation flux",
-    PAVICS_SNW: "snw — snow water equivalent",
-    PAVICS_SFCWIND: "sfcWind — 10 m wind speed",
-    PAVICS_PSL: "psl — sea-level pressure",
+    PAVICS_TAS: "Air temperature (daily mean, °C)",
+    PAVICS_TASMAX: "Air temperature (daily high, °C)",
+    PAVICS_TASMIN: "Air temperature (daily low, °C)",
+    PAVICS_TDPS: "Dew point / humidity (°C)",
+    PAVICS_PR: "Precipitation (mm/day)",
+    PAVICS_SNW: "Snow on ground (water equivalent, mm)",
+    PAVICS_SFCWIND: "Wind speed at 10 m (m/s)",
+    PAVICS_PSL: "Sea-level pressure (hPa)",
 }
 
 _TEMPERATURE_VARS = frozenset(
@@ -92,6 +118,9 @@ _TEMPERATURE_VARS = frozenset(
         PAVICS_TDPS,
     }
 )
+_PRECIP_VARS = frozenset({PAVICS_PR})
+_PRESSURE_VARS = frozenset({PAVICS_PSL})
+_SNOW_VARS = frozenset({PAVICS_SNW})
 
 DEFAULT_SERIES_DAYS = 30
 OpenDataset = Callable[..., Any]
@@ -271,7 +300,7 @@ def _process_pavics_dataset(
             "CaSR v3.2 data could not be fetched from PAVICS for this region."
         ) from exc
 
-    values, units = _maybe_convert_temperature(variable, values, dataset[variable])
+    values, units = _display_units(variable, values, dataset[variable])
     lat_c = lat2d[r0:r1, c0:c1]
     lon_c = lon2d[r0:r1, c0:c1]
     mask = shapely.contains_xy(geometry, lon_c, lat_c)
@@ -301,7 +330,6 @@ def _process_pavics_dataset(
         row_slice=(r0, r1),
         col_slice=(c0, c1),
         series_days=series_days,
-        convert_temperature=variable in _TEMPERATURE_VARS,
     )
     warnings.append(
         f"Showing the latest published PAVICS day ({selected.date().isoformat()}) "
@@ -327,18 +355,30 @@ def _process_pavics_dataset(
     )
 
 
-def _maybe_convert_temperature(
+def _display_units(
     variable: str,
     values: np.ndarray,
     data_array: Any,
 ) -> tuple[np.ndarray, str | None]:
+    """Convert PAVICS native units into friendlier display units."""
+
     units = data_array.attrs.get("units")
     if not isinstance(units, str):
         units = None
-    if variable not in _TEMPERATURE_VARS:
-        return values, units
-    if units in {"K", "kelvin", "Kelvin"}:
+    if variable in _TEMPERATURE_VARS and units in {"K", "kelvin", "Kelvin"}:
         return values - 273.15, "deg_C"
+    if variable in _PRECIP_VARS and units in {
+        "kg m-2 s-1",
+        "kg m^-2 s^-1",
+        "kg/m2/s",
+    }:
+        # Daily mean flux → millimetres of water that day.
+        return values * 86400.0, "mm/day"
+    if variable in _SNOW_VARS and units in {"kg m-2", "kg m^-2", "kg/m2"}:
+        # 1 kg/m^2 of water ≡ 1 mm water depth.
+        return values, "mm"
+    if variable in _PRESSURE_VARS and units in {"Pa", "pa"}:
+        return values / 100.0, "hPa"
     return values, units
 
 
@@ -354,7 +394,6 @@ def _pavics_point_series(
     row_slice: tuple[int, int],
     col_slice: tuple[int, int],
     series_days: int,
-    convert_temperature: bool,
 ) -> tuple[float, float, pd.DataFrame]:
     r0, r1 = row_slice
     c0, c1 = col_slice
@@ -407,10 +446,11 @@ def _pavics_point_series(
         raise CASRRequestError(
             "CaSR v3.2 point series could not be fetched from PAVICS."
         ) from exc
-    if convert_temperature:
-        units = dataset[variable].attrs.get("units")
-        if units in {"K", "kelvin", "Kelvin"}:
-            series_vals = series_vals - 273.15
+    series_vals, _ = _display_units(
+        variable,
+        series_vals,
+        dataset[variable],
+    )
     frame = pd.DataFrame(
         {
             SERIES_TIME_COLUMN: [

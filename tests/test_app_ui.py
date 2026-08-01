@@ -644,6 +644,13 @@ def test_initial_render_explains_casr_v32_without_date_picker() -> None:
         "Show CaSR v3.2 on the map" in checkbox.label
         for checkbox in app.checkbox
     )
+    assert any(
+        element.label == "What to map" for element in app.selectbox
+    )
+    assert any(
+        "Same idea as a daily mean thermometer reading" in element.value
+        for element in app.caption
+    )
     # Hidden layers must not appear in the Streamlit UI.
     labels = [button.label for button in app.button]
     assert not any("ECCC archive" in label for label in labels)

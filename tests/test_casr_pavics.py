@@ -14,7 +14,9 @@ from coastal_flood_explorer.casr_common import (
     CASRDataUnavailableError,
 )
 from coastal_flood_explorer.casr_pavics import (
+    PAVICS_PR,
     PAVICS_TAS,
+    PAVICS_VARIABLE_LABELS,
     fetch_latest_for_roi,
     latest_available_day,
     normalize_pavics_variable,
@@ -69,6 +71,12 @@ def test_normalize_pavics_variable() -> None:
     assert normalize_pavics_variable("nope") is None
 
 
+def test_variable_labels_are_plain_english() -> None:
+    assert PAVICS_VARIABLE_LABELS[PAVICS_TAS].startswith("Air temperature")
+    assert "mm/day" in PAVICS_VARIABLE_LABELS[PAVICS_PR]
+    assert "tas —" not in PAVICS_VARIABLE_LABELS[PAVICS_TAS]
+
+
 def test_latest_available_day_uses_last_time() -> None:
     dataset = _pavics_dataset()
 
@@ -99,6 +107,25 @@ def test_fetch_latest_for_roi_masks_and_converts_kelvin() -> None:
     # Kelvin ~250-280 -> Celsius roughly -23 to 7.
     assert float(subset.point_series["value"].iloc[-1]) < 50.0
     assert any("latest published PAVICS day" in w for w in subset.warnings)
+
+
+def test_fetch_latest_converts_precip_to_mm_per_day() -> None:
+    dataset = _pavics_dataset()
+    # 1 kg m-2 s-1 for a day ≡ 86400 mm/day.
+    dataset[PAVICS_PR] = (
+        ("time", "rlat", "rlon"),
+        np.full(dataset[PAVICS_TAS].shape, 1.0 / 86400.0),
+    )
+    dataset[PAVICS_PR].attrs["units"] = "kg m-2 s-1"
+
+    subset = fetch_latest_for_roi(
+        roi=ROI,
+        variable=PAVICS_PR,
+        series_days=5,
+        open_dataset=lambda _url: dataset.copy(deep=True),
+    )
+    assert subset.units == "mm/day"
+    assert float(subset.point_series["value"].iloc[-1]) == pytest.approx(1.0)
 
 
 def test_fetch_latest_rejects_unsupported_variable() -> None:

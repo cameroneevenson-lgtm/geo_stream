@@ -1196,10 +1196,15 @@ def _render_casr_controls(
         )
 
     variable = st.selectbox(
-        "Variable",
+        "What to map",
         CASR_PAVICS_VARIABLES,
         format_func=lambda code: PAVICS_VARIABLE_LABELS.get(code, code),
         key="casr_selected_variable",
+        help=(
+            "These are daily surface weather fields from ECCC's CaSR v3.2 "
+            "reanalysis (served by PAVICS). They are not flood polygons, "
+            "tide gauges, or surge forecasts."
+        ),
     )
     st.caption(PAVICS_VARIABLE_DEFINITIONS[variable])
     opacity = st.slider(
@@ -1308,7 +1313,11 @@ def _run_casr_fetch(
                     "subbasin_id": subset.subbasin_id,
                 }
             ]
-            label = f"CaSR v3.2 · {subset.variable} · {day:%Y-%m-%d}"
+            plain = PAVICS_VARIABLE_LABELS.get(
+                subset.variable,
+                subset.variable,
+            )
+            label = f"CaSR v3.2 · {plain} · {day:%Y-%m-%d}"
             st.session_state["casr_overlay_params"] = {
                 "label": label,
                 "opacity": opacity,
@@ -1318,7 +1327,7 @@ def _run_casr_fetch(
             st.session_state["casr_warnings"] = list(subset.warnings)
             st.session_state["casr_point_series"] = subset.point_series
             st.session_state["casr_subset_summary"] = (
-                f"{subset.variable} · latest day {day:%Y-%m-%d}"
+                f"{plain} · latest day {day:%Y-%m-%d}"
                 + (f" · {subset.units}" if subset.units else "")
             )
             status.update(

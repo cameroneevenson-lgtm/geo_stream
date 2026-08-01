@@ -197,7 +197,7 @@ from coastal_flood_explorer.synthetic import generate_synthetic_data
 
 LOGGER = logging.getLogger("geo_stream.app")
 REPOSITORY_URL = "https://github.com/cameroneevenson-lgtm/geo_stream"
-MAP_COMPONENT_KEY = "coastal-flood-map-v7"
+MAP_COMPONENT_KEY = "coastal-flood-map-v8"
 EMPTY_COLLECTION = {"type": "FeatureCollection", "features": []}
 STATE_DEFAULTS: dict[str, Any] = {
     "drawings": [],
@@ -222,7 +222,7 @@ STATE_DEFAULTS: dict[str, Any] = {
     "chs_bundles": {},
     "chs_selection_roi": None,
     "selected_chs_station_id": None,
-    "casr_enabled": True,
+    "casr_enabled": False,
     "casr_overlay_params": None,
     "casr_opacity": 0.75,
     "casr_fetch_roi": None,
@@ -1178,19 +1178,19 @@ def _render_casr_controls(
     bbox: tuple[float, float, float, float] | None,
     active_roi: Mapping[str, Any] | None,
 ) -> None:
-    """Render the hero CaSR-Rivers sidebar (CCCRIS-style variable/time picks)."""
+    """Render optional CaSR-Rivers controls (secondary to coastal layers)."""
 
-    st.header("CaSR-Rivers (hero layer)")
+    st.divider()
+    st.header("CaSR-Rivers (optional)")
     st.caption(
-        "ECCC Canadian Surface Reanalysis — Rivers v2.1 from HPFX. "
-        "Historical reanalysis for drawn sub-basins. This is not a flood "
-        "warning service and not the same product as CCCRIS coastal surge "
-        "hindcasts."
+        "Optional inland river reanalysis (ECCC CaSR-Rivers v2.1, ends 2017). "
+        "This is not coastal flood, surge, or tide data. Prefer CHS gauges, "
+        "ECCC coastal-flood polygons, and GDSPS/RESPS for the coast."
     )
     if _CASR_IMPORT_ERROR:
         st.error(
-            "CaSR-Rivers could not be loaded in this deployment, so the hero "
-            "layer is unavailable. Other map tools still work. Import error: "
+            "CaSR-Rivers could not be loaded in this deployment. Coastal "
+            "tools still work. Import error: "
             f"{_CASR_IMPORT_ERROR}"
         )
         return
@@ -1198,8 +1198,8 @@ def _render_casr_controls(
         "Show CaSR-Rivers on the map",
         key="casr_enabled",
         help=(
-            "Default-on hero overlay. Fetching NetCDF is a separate explicit "
-            "action after you draw a region."
+            "Off by default. Fetching NetCDF is a separate explicit action "
+            "after you draw a region."
         ),
     )
     # Month is chosen offline from the published CaSR-Rivers window. Listing
@@ -1431,12 +1431,12 @@ def _render_gdsps_controls(
     """Render the GDSPS storm-surge sidebar section and set overlay state."""
 
     st.divider()
-    st.header("Storm Surge (GDSPS / RESPS)")
+    st.header("Coastal storm surge (GDSPS / RESPS)")
     st.caption(
-        "ECCC storm-surge models. ETAS is storm-surge elevation; SSH is total "
-        "water level (not an engineering or chart datum). The two variables are "
-        "never interchanged, and GDSPS (deterministic) is never mixed with "
-        "RESPS (ensemble)."
+        "ECCC coastal storm-surge models. ETAS is storm-surge elevation; SSH is "
+        "total water level (not an engineering or chart datum). The two "
+        "variables are never interchanged, and GDSPS (deterministic) is never "
+        "mixed with RESPS (ensemble)."
     )
     enabled = st.checkbox(
         "Enable storm-surge overlay",
@@ -1915,9 +1915,7 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
     with st.sidebar:
         _render_feedback_form()
         st.divider()
-        _render_casr_controls(bbox, st.session_state.get("active_roi"))
-        st.divider()
-        st.header("ECCC forecast overlay")
+        st.header("ECCC coastal flood overlay")
         if bbox is None:
             st.info(
                 "No region selected yet. Use the polygon or rectangle button "
@@ -2287,6 +2285,7 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                 )
 
         _render_gdsps_controls(bbox, st.session_state.get("active_roi"))
+        _render_casr_controls(bbox, st.session_state.get("active_roi"))
 
         clipped_data = st.session_state.get("clipped_data")
         options = forecast_period_options(clipped_data)
@@ -2754,10 +2753,10 @@ def main() -> None:
         returned_objects=MAP_RETURNED_OBJECTS,
         feature_group_to_add=[
             drawing_layer,
-            casr_layer,
             result_layer,
             chs_station_layer,
             gdsps_layer,
+            casr_layer,
         ],
         layer_control=build_layer_control(),
         on_change=_sync_map_drawings,
@@ -2775,10 +2774,10 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    _render_casr_results()
     _render_animation(criteria, stale=stale)
     _render_gdsps_results()
     _render_results(filtered, stale=stale)
+    _render_casr_results()
 
 
 if __name__ == "__main__":

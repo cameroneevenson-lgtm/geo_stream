@@ -410,12 +410,12 @@ def build_result_layer(
     feature_collection: Mapping[str, Any] | None,
     *,
     synthetic: bool = False,
-    show: bool = False,
+    show: bool = True,
 ) -> folium.FeatureGroup:
     """Build a noneditable result layer with escaped popups and tooltips.
 
-    Hidden in the layer control by default so CaSR-Rivers stays the hero
-    overlay at app load; users can still enable ECCC results from the control.
+    Shown by default so coastal flood polygons remain the primary map result
+    layer; users can still hide them from the layer control.
     """
 
     name = (
@@ -689,12 +689,12 @@ def build_chs_station_layer(
     *,
     selected_station_id: str | None = None,
     bundle: CHSWaterLevelBundle | None = None,
-    show: bool = False,
+    show: bool = True,
 ) -> folium.FeatureGroup:
     """Build a noneditable layer of operating CHS observation stations.
 
-    Hidden in the layer control by default so CaSR-Rivers stays the hero
-    overlay at app load; stations remain available via the layer control.
+    Shown by default as a primary coastal layer; users can hide stations from
+    the layer control.
     """
 
     group = folium.FeatureGroup(

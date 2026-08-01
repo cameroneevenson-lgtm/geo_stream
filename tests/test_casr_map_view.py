@@ -43,11 +43,11 @@ def test_build_casr_overlay_adds_image_and_marker() -> None:
     assert len(group._children) >= 2
 
 
-def test_non_casr_layers_hidden_by_default() -> None:
-    """ECCC results, CHS, and GDSPS start unchecked so CaSR is the hero."""
+def test_coastal_layers_shown_by_default() -> None:
+    """CHS and ECCC coastal results start visible; GDSPS stays opt-in."""
 
-    assert build_result_layer(None).show is False
-    assert build_chs_station_layer([]).show is False
+    assert build_result_layer(None).show is True
+    assert build_chs_station_layer([]).show is True
     assert build_gdsps_overlay_layer(None, enabled=False).show is False
 
 

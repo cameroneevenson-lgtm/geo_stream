@@ -216,7 +216,7 @@ def test_chs_station_layer_is_toggleable_and_highlights_selection() -> None:
 
     assert layer.layer_name == "CHS observation stations"
     assert layer.control is True
-    assert layer.show is False
+    assert layer.show is True
     assert '"radius": 8' in rendered
     assert "Bedford Institute" in rendered
     assert "Observations and tide predictions" in rendered

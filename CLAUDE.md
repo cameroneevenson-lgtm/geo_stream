@@ -247,3 +247,7 @@ ECCC service. `synthetic.generate_synthetic_data` takes an injectable
 
 Commit subjects are short imperative sentences ("Constrain map navigation to
 Canada"), no body. Auto-commit completed work without being asked.
+
+## Branching
+
+All work happens on `main`. Do not create branches for agent work - commit and push straight to `main`. If an agent branch does turn up, fold it into `main`, prune it locally and on the remote, then push.

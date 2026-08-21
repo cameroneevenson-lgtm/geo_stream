@@ -15,6 +15,22 @@ empty-result and synthetic-data messages. Don't soften them.
 **This repo is public.** No secrets, tokens, or internal links in commits.
 `.streamlit/secrets.toml` is gitignored.
 
+## Adding to this file
+
+**Be conservative.** This file loads into context in full, every session, so length costs
+attention — a file that grows without pruning gets skimmed instead of read. Before adding
+anything, check that it changes what somebody would *do*:
+
+- **If a rule already here covers the new discovery, add nothing** — a fresh example of an
+  existing rule is the rule working, not new information.
+- **Sharpen the line that was almost right; don't append a section beside it.**
+- **Dated findings, probe results and campaign history go in `docs/`.** A closed
+  investigation earns one sentence: what is settled, and what not to re-try.
+- **Don't describe what the code already says** — layout, rendering, field lists and call
+  chains are read faster from the source than from here.
+
+Removing a line that no longer earns its place is as valuable as adding one.
+
 ## Running
 
 Uses the shared `C:\Tools\.venv`, not a project-local venv. From the repo root:

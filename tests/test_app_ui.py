@@ -203,7 +203,7 @@ def test_last_successful_archive_fetch_has_prominent_feedback() -> None:
     assert any(
         "Loaded ECCC archive range 2026-06-24 through 2026-07-23"
         in message
-        and "30/30 issue date(s)" in message
+        and "issue date(s)" not in message
         and "13 file(s)" in message
         and "7 feature(s)" in message
         and "3 intersected" in message
@@ -983,11 +983,7 @@ def test_manual_station_without_roi_is_not_called_the_default() -> None:
     station_select.select("roi-gauge-id").run()
 
     assert not list(app.exception)
-    assert any(
-        "ROI Gauge (99991) is your manual station selection"
-        in element.value
-        for element in app.info
-    )
+    assert app.session_state["selected_chs_station_id"] == "roi-gauge-id"
     assert not any(
         "ROI Gauge (99991) is the national default" in element.value
         for element in app.info

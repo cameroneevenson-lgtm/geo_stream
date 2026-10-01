@@ -907,16 +907,7 @@ def _render_chs_water_levels(
 
         selected_match = matches_by_id.get(selected_id)
         if current_roi is None:
-            if selected_id == auto_match.station.id:
-                st.info(
-                    f"No region is drawn, so {selected_station.label} is the "
-                    "national default."
-                )
-            else:
-                st.info(
-                    f"No region is drawn. {selected_station.label} is your "
-                    "manual station selection."
-                )
+            pass  # No region: the station selector already says which gauge.
         elif match_error is not None:
             st.warning(
                 "The station-to-region distance could not be calculated. "
@@ -1576,7 +1567,6 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                 "in the map's upper-left drawing toolbar to draw within Canada."
             )
         else:
-            st.success("Region selected — the data actions are ready.")
             st.caption("Active ROI bounds (CRS84: lon, lat)")
             st.code(
                 "\n".join(
@@ -2042,6 +2032,8 @@ def _render_source_status(stale: bool) -> None:
             + (
                 f" · {successful_date_count}/{requested_date_count} "
                 "issue date(s)"
+                if successful_date_count != requested_date_count
+                else ""
             )
             + f" · {product_count} file(s) · {raw_count} feature(s) · "
             f"{clipped_count} intersected the exact region"

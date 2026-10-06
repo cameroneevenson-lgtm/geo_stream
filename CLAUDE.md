@@ -1,4 +1,5 @@
 # CLAUDE.md — geo_stream
+New/changed Python lines must pass Ruff via the pre-commit hook; install it with `C:\Tools\.venv\Scripts\python.exe C:\Tools\tools_bootstrap\install_hooks.py`.
 
 Streamlit app with an always-visible **CHS water-level** view and optional **ECCC
 Coastal Flooding Risk Index** polygons. Drawing an ROI automatically selects an

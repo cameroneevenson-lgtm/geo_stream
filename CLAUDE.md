@@ -141,8 +141,9 @@ All work happens on `main`. Do not create branches for agent work - commit and p
 Never write changes directly into a production source file.
 
 Always:
-1. Write the proposed change into a scratch / temporary file first.
-2. Review and confirm the scratch content.
-3. Only then apply the change to the production file.
+1. Write the complete proposed change into a scratch / temporary file first.
+2. Once the full thought is finished in the scratch file, automatically apply the diff to the production file.
+
+No human review of the scratch file is required. Finish the complete change in scratch, then apply it.
 
 Direct writes risk partial or corrupt state. Hot-reload while an edit is still in progress will fail the process.

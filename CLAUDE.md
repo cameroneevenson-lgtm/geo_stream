@@ -135,3 +135,14 @@ Commit subjects are short imperative sentences, no body; auto-commit completed w
 ## Branching
 
 All work happens on `main`. Do not create branches for agent work - commit and push straight to `main`. If an agent branch does turn up, fold it into `main`, prune it locally and on the remote, then push.
+
+## File editing workflow (required)
+
+Never write changes directly into a production source file.
+
+Always:
+1. Write the proposed change into a scratch / temporary file first.
+2. Review and confirm the scratch content.
+3. Only then apply the change to the production file.
+
+Direct writes risk partial or corrupt state. Hot-reload while an edit is still in progress will fail the process.

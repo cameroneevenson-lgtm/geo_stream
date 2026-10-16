@@ -12,7 +12,6 @@ from coastal_flood_explorer.gdsps_common import (
     GDSPSConfigurationError,
     GDSPSRequestError,
 )
-from coastal_flood_explorer import gdsps_thredds
 from coastal_flood_explorer.gdsps_thredds import (
     GDSPS_THREDDS_CATALOG_URL,
     GDSPSThreddsClient,

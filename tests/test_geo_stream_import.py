@@ -21,7 +21,6 @@ SHORT_ALIAS_SAMPLES = ("api", "chs", "geometry", "archive_dates", "gdsps_common"
 
 def _purge_geo_stream_modules() -> None:
     """Drop cached geo_stream / coastal_flood_explorer modules."""
-    prefixes = ("geo_stream", "coastal_flood_explorer", "app", "watch_and_run")
     for name in list(sys.modules):
         if name == "geo_stream" or name.startswith("geo_stream."):
             del sys.modules[name]

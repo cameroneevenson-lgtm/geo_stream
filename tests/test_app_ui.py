@@ -247,7 +247,7 @@ app_module._cached_archive_fetch = fake_fetch
     fetch_button.click().run()
 
     assert not list(app.exception)
-    statuses = app.get("status")
+    statuses = app.status
     archive_status = next(
         status
         for status in statuses
@@ -260,7 +260,7 @@ app_module._cached_archive_fetch = fake_fetch
     assert app.session_state["current_source_mode"] == "archive"
     assert app.session_state["raw_archive_download"] is not None
     downloads = {
-        button.label: button for button in app.get("download_button")
+        button.label: button for button in app.download_button
     }
     assert set(downloads) == {
         "Download raw fetched CHS JSON",
@@ -309,10 +309,12 @@ app_module._cached_archive_fetch = fake_fetch
 
     range_picker = next(
         element
-        for element in app.get("date_input")
+        for element in app.date_input
         if element.label == "Archived ECCC issue-date range (UTC)"
     )
-    start = range_picker.value[0]
+    picked = range_picker.value
+    assert isinstance(picked, tuple) and len(picked) == 2
+    start = picked[0]
     selected = (start, start + timedelta(days=2))
     range_picker.set_value(selected).run()
     fetch_button = next(
@@ -354,10 +356,12 @@ app_module._cached_archive_fetch = fake_fetch
 
     range_picker = next(
         element
-        for element in app.get("date_input")
+        for element in app.date_input
         if element.label == "Archived ECCC issue-date range (UTC)"
     )
-    start = range_picker.value[0]
+    picked = range_picker.value
+    assert isinstance(picked, tuple) and len(picked) == 2
+    start = picked[0]
     range_picker.set_value((start, start + timedelta(days=2))).run()
     fetch_button = next(
         button
@@ -373,7 +377,7 @@ app_module._cached_archive_fetch = fake_fetch
     assert any(
         "previous results were kept" in status.label
         and status.state == "error"
-        for status in app.get("status")
+        for status in app.status
     )
 
 
@@ -423,10 +427,12 @@ app_module._cached_archive_fetch = fake_fetch
 
     range_picker = next(
         element
-        for element in app.get("date_input")
+        for element in app.date_input
         if element.label == "Archived ECCC issue-date range (UTC)"
     )
-    start = range_picker.value[0]
+    picked = range_picker.value
+    assert isinstance(picked, tuple) and len(picked) == 2
+    start = picked[0]
     range_picker.set_value((start, start + timedelta(days=2))).run()
     fetch_button = next(
         button
@@ -489,7 +495,7 @@ app_module._cached_archive_fetch = fake_fetch
     assert any(
         "loaded partially with 1 date not loaded" in status.label
         and "29/30 date(s)" in status.label
-        for status in app.get("status")
+        for status in app.status
     )
     assert any(
         "1 selected archive date was not loaded" in warning.value
@@ -566,7 +572,7 @@ app_module._cached_archive_fetch = fake_fetch
     assert any(
         "previous results were kept" in status.label
         and status.state == "error"
-        for status in app.get("status")
+        for status in app.status
     )
     assert any(
         "None of the selected ECCC archive dates could be loaded"
@@ -607,7 +613,7 @@ def test_initial_render_explains_archive_without_fetching() -> None:
     assert not list(app.exception)
     range_picker = next(
         element
-        for element in app.get("date_input")
+        for element in app.date_input
         if element.label == "Archived ECCC issue-date range (UTC)"
     )
     assert isinstance(range_picker.value, tuple)
@@ -829,7 +835,7 @@ def test_initial_render_loads_default_chs_water_levels_without_roi() -> None:
 
     assert not list(app.exception)
     assert app.session_state["selected_chs_station_id"] == "bedford-id"
-    statuses = app.get("status")
+    statuses = app.status
     assert any(
         "CHS water levels loaded for Bedford Institute (00491)"
         in status.label
@@ -848,7 +854,7 @@ def test_initial_render_loads_default_chs_water_levels_without_roi() -> None:
     assert any(
         button.label == "Download raw fetched CHS JSON"
         and not button.disabled
-        for button in app.get("download_button")
+        for button in app.download_button
     )
 
 
@@ -955,7 +961,7 @@ app_module._cached_chs_bundle = selective_bundle
         "showing fallback data from Bedford Institute (00491)"
         in status.label
         and status.state == "error"
-        for status in app.get("status")
+        for status in app.status
     )
     assert any(
         "Water-level data for ROI Gauge (99991) could not be loaded"

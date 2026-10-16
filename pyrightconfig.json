@@ -1,0 +1,22 @@
+{
+  "typeCheckingMode": "standard",
+  "pythonVersion": "3.12",
+  "pythonPlatform": "Windows",
+  "venvPath": "..",
+  "venv": ".venv",
+  "extraPaths": [
+    ".."
+  ],
+  "exclude": [
+    "**/_runtime",
+    "**/*_baseline",
+    "**/.venv*",
+    "**/.buildvenv",
+    "**/build",
+    "**/dist",
+    "**/_tmp*",
+    "**/_ml_*",
+    "**/prior_art",
+    "**/__pycache__"
+  ]
+}

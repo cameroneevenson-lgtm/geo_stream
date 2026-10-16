@@ -11,7 +11,7 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
 from shapely.errors import GEOSException
 from shapely.geometry import (
@@ -177,7 +177,8 @@ def parse_roi(roi: GeoJSONMapping | BaseGeometry) -> BaseGeometry:
                 f"received {readable_type}."
             )
         try:
-            candidate = shape(payload)
+            # Shapely only reads the mapping; its stub asks for a dict.
+            candidate = shape(cast(dict[str, Any], payload))
         except (GEOSException, ValueError, TypeError, KeyError) as exc:
             raise GeometryError(f"The ROI is not valid GeoJSON: {exc}") from exc
     else:
@@ -387,7 +388,8 @@ def _clip_one_feature(
         )
 
     try:
-        source = shape(geometry_payload)
+        # Shapely only reads the mapping; its stub asks for a dict.
+        source = shape(cast(dict[str, Any], geometry_payload))
     except (GEOSException, ValueError, TypeError, KeyError) as exc:
         raise GeometryError(f"the feature geometry is malformed: {exc}") from exc
 

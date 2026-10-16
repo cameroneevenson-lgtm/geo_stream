@@ -7,7 +7,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import math
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
 import folium
 from folium.plugins import Timeline, TimelineSlider
@@ -113,7 +113,8 @@ def _safe_polygon(
         return None
 
     try:
-        parsed = shape(geometry)
+        # Shapely only reads the mapping; its stub asks for a dict.
+        parsed = shape(cast(dict[str, Any], geometry))
     except (AttributeError, KeyError, TypeError, ValueError):
         return None
     if (
@@ -306,7 +307,8 @@ def _polygon_from_roi(roi: Mapping[str, Any]) -> BaseGeometry:
         raise AnimationError("The animation ROI has no polygon geometry.")
 
     try:
-        parsed = shape(candidate)
+        # Shapely only reads the mapping; its stub asks for a dict.
+        parsed = shape(cast(dict[str, Any], candidate))
     except (AttributeError, KeyError, TypeError, ValueError) as error:
         raise AnimationError("The animation ROI is not valid GeoJSON.") from error
     if (
@@ -375,7 +377,7 @@ def build_forecast_animation(
         steps=max(1, timeline_data.frame_count),
         playback_duration=max(4_000, timeline_data.frame_count * 1_500),
     )
-    slider.options["format_output"] = _UTC_SLIDER_LABEL
+    slider.options["format_output"] = _UTC_SLIDER_LABEL  # pyright: ignore[reportArgumentType]  # folium emits JsCode option values; its stub only lists JSON types
     slider.add_timelines(timeline).add_to(map_object)
 
     return map_object

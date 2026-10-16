@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 import requests
@@ -58,6 +59,18 @@ class _HTTPClient:
         return self.responses.pop(0)
 
 
+def _section(value: object) -> dict[str, Any]:
+    """Narrow a snapshot or request value to the nested mapping under test."""
+    assert isinstance(value, dict)
+    return value
+
+
+def _text(value: object) -> str:
+    """Narrow a snapshot value to the string under test."""
+    assert isinstance(value, str)
+    return value
+
+
 CONFIG = GitHubConfig(
     token="github-token-that-must-stay-private",
     owner="example-owner",
@@ -86,7 +99,7 @@ def test_session_state_sanitization_removes_sensitive_keys_recursively() -> None
     assert "also-secret" not in encoded
     assert "hidden-key" not in encoded
     assert "github_token" not in encoded
-    assert snapshot["__snapshot_metadata__"][
+    assert _section(snapshot["__snapshot_metadata__"])[
         "sensitive_values_omitted"
     ] == 4
 
@@ -109,10 +122,10 @@ def test_session_state_sanitization_handles_unusual_values_and_cycles() -> None:
     assert snapshot["when"] == "2026-07-28T15:00:00+00:00"
     assert snapshot["coordinates"] == [1.25, 2.5]
     assert snapshot["not_a_number"] == "nan"
-    assert snapshot["binary"].startswith("<omitted binary value:")
-    assert snapshot["upload"].startswith("<omitted uploaded file:")
+    assert _text(snapshot["binary"]).startswith("<omitted binary value:")
+    assert _text(snapshot["upload"]).startswith("<omitted uploaded file:")
     assert "uploaded file contents" not in json.dumps(snapshot)
-    assert snapshot["unusual"].endswith("._UnusualValue>")
+    assert _text(snapshot["unusual"]).endswith("._UnusualValue>")
     assert snapshot["cycle"] == ["<omitted cyclic reference>"]
     json.dumps(snapshot, allow_nan=False)
 
@@ -129,8 +142,9 @@ def test_session_state_snapshot_has_a_hard_total_size_limit() -> None:
     ).encode("utf-8")
 
     assert len(encoded) <= 400
-    assert snapshot["__snapshot_metadata__"]["truncated"] is True
-    assert snapshot["__snapshot_metadata__"]["size_limited_values"] > 0
+    metadata = _section(snapshot["__snapshot_metadata__"])
+    assert metadata["truncated"] is True
+    assert metadata["size_limited_values"] > 0
 
 
 def test_current_page_query_parameters_are_sanitized() -> None:
@@ -219,7 +233,7 @@ def test_successful_github_response_returns_public_issue_details() -> None:
         url="https://github.com/example-owner/example-repo/issues/42",
         label_applied=True,
     )
-    assert client.calls[0]["json"]["labels"] == ["bug"]
+    assert _section(client.calls[0]["json"])["labels"] == ["bug"]
     assert client.calls[0]["timeout"] == (3.05, 12.0)
 
 
@@ -239,8 +253,8 @@ def test_unavailable_label_is_retried_without_failing_submission() -> None:
 
     assert issue.number == 43
     assert issue.label_applied is False
-    assert "labels" in client.calls[0]["json"]
-    assert "labels" not in client.calls[1]["json"]
+    assert "labels" in _section(client.calls[0]["json"])
+    assert "labels" not in _section(client.calls[1]["json"])
 
 
 def test_github_authentication_failure_is_safe() -> None:

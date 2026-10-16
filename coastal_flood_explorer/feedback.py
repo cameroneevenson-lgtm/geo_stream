@@ -13,6 +13,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Any, TypedDict
 from urllib.parse import urlparse
 
 import requests
@@ -280,7 +281,7 @@ def _safe_snapshot_value(
 
 
 def sanitize_session_state(
-    state: Mapping[object, object],
+    state: Mapping[Any, object],
     *,
     max_bytes: int = DEFAULT_SNAPSHOT_MAX_BYTES,
     excluded_prefixes: tuple[str, ...] = (),
@@ -362,10 +363,17 @@ def format_issue_title(report_type: str, short_title: str) -> str:
     return f"[{prefix}] {cleaned[:available].rstrip()}"
 
 
+class PageContext(TypedDict):
+    """Safe navigation context attached to a feedback report."""
+
+    current_page: str
+    query_parameters: dict[str, object]
+
+
 def get_current_page_context(
     current_page: str,
-    query_parameters: Mapping[object, object] | None = None,
-) -> dict[str, object]:
+    query_parameters: Mapping[Any, object] | None = None,
+) -> PageContext:
     """Build safe navigation context for a report."""
 
     page = " ".join(current_page.split())[:200] or "Unknown"

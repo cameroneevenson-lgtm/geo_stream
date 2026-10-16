@@ -17,7 +17,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from statistics import fmean
-from typing import Any, TypeAlias, overload
+from typing import Any, TypeAlias, cast, overload
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import pandas as pd
@@ -60,7 +60,7 @@ CHART_COLUMNS = (
 )
 
 _STATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
-_JSON_ATOMIC: TypeAlias = type(None) | bool | int | float | str
+_JSON_ATOMIC: TypeAlias = None | bool | int | float | str
 JSONValue: TypeAlias = (
     _JSON_ATOMIC | list["JSONValue"] | dict[str, "JSONValue"]
 )
@@ -850,10 +850,17 @@ def water_level_chart_frame(bundle: CHSWaterLevelBundle) -> pd.DataFrame:
         frame[CHART_TIME_COLUMN],
         utc=True,
     ).astype("datetime64[ns, UTC]")
+    # pd.array accepts a Series here; its stubs list only sequences and arrays.
     for column in (CHART_OBSERVED_COLUMN, CHART_PREDICTED_COLUMN):
-        frame[column] = pd.array(frame[column], dtype="Float64")
+        frame[column] = pd.array(
+            cast(Sequence[float | None], frame[column]),
+            dtype="Float64",
+        )
     for column in (CHART_OBSERVED_QC_COLUMN, CHART_PREDICTED_QC_COLUMN):
-        frame[column] = pd.array(frame[column], dtype="string")
+        frame[column] = pd.array(
+            cast(Sequence[str | None], frame[column]),
+            dtype="string",
+        )
     return frame
 
 
@@ -870,7 +877,7 @@ def raw_bundle_bytes(bundle: CHSWaterLevelBundle) -> bytes:
         raise CHSConfigurationError(
             "A valid CHS water-level bundle is required for raw export."
         )
-    responses: list[dict[str, JSONValue]] = []
+    responses: list[JSONValue] = []
     for document in bundle.raw_documents:
         if not isinstance(document, CHSRawDocument):
             raise CHSConfigurationError(

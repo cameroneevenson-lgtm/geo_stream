@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import requests
@@ -78,6 +78,12 @@ class FakeSession:
         return result
 
 
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
+
+
 @pytest.mark.parametrize(
     ("bbox", "message_fragment"),
     [
@@ -131,7 +137,7 @@ def test_fetch_sends_expected_initial_query_and_timeout() -> None:
         FakeResponse({"type": "FeatureCollection", "features": []})
     )
 
-    result = ECCCClient(session=session).fetch((-66, 43, -59, 48))
+    result = ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
 
     assert result == {"type": "FeatureCollection", "features": []}
     assert session.headers["User-Agent"] == USER_AGENT
@@ -158,14 +164,14 @@ def test_fetch_supports_french_language() -> None:
         )
     )
 
-    ECCCClient(session=session).fetch((-66, 43, -59, 48), "FR")
+    ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48), "FR")
 
     assert session.calls[0][1]["params"]["lang"] == "fr"
 
 
 @pytest.mark.parametrize("language", ["", "de", 7, None])
 def test_fetch_rejects_unsupported_language(language: Any) -> None:
-    client = ECCCClient(session=FakeSession())
+    client = ECCCClient(session=as_session(FakeSession()))
     with pytest.raises(ECCCConfigurationError, match="language"):
         client.fetch((-66, 43, -59, 48), language)
 
@@ -200,7 +206,7 @@ def test_fetch_aggregates_absolute_and_relative_pagination() -> None:
         FakeResponse(third),
     )
 
-    result = ECCCClient(session=session).fetch((-66, 43, -59, 48))
+    result = ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
 
     assert [item["id"] for item in result["features"]] == [
         "one",
@@ -229,7 +235,7 @@ def test_fetch_accepts_supported_json_media_types(content_type: str) -> None:
             content_type=content_type,
         )
     )
-    assert ECCCClient(session=session).fetch((-66, 43, -59, 48))[
+    assert ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))[
         "features"
     ] == []
 
@@ -246,7 +252,7 @@ def test_fetch_rejects_unsupported_content_type(content_type: str) -> None:
         )
     )
     with pytest.raises(ECCCResponseError, match="content type"):
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
 
 
 def test_fetch_wraps_invalid_json_in_user_safe_error() -> None:
@@ -257,7 +263,7 @@ def test_fetch_wraps_invalid_json_in_user_safe_error() -> None:
         )
     )
     with pytest.raises(ECCCResponseError, match="did not contain valid JSON") as exc:
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
     assert "decoder detail" not in str(exc.value)
 
 
@@ -273,7 +279,7 @@ def test_fetch_wraps_invalid_json_in_user_safe_error() -> None:
 def test_fetch_rejects_malformed_feature_collections(payload: Any) -> None:
     session = FakeSession(FakeResponse(payload))
     with pytest.raises(ECCCResponseError):
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
 
 
 def test_fetch_preserves_malformed_feature_entries_for_clipping_diagnostics() -> None:
@@ -282,7 +288,7 @@ def test_fetch_preserves_malformed_feature_entries_for_clipping_diagnostics() ->
         FakeResponse({"type": "FeatureCollection", "features": entries})
     )
 
-    result = ECCCClient(session=session).fetch((-66, 43, -59, 48))
+    result = ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
 
     assert result["features"] == entries
 
@@ -303,7 +309,7 @@ def test_fetch_detects_pagination_loop_before_repeating_request() -> None:
     )
 
     with pytest.raises(ECCCPaginationError, match="repeating"):
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
     assert len(session.calls) == 1
 
 
@@ -326,7 +332,7 @@ def test_fetch_stops_at_configured_page_limit() -> None:
     )
 
     with pytest.raises(ECCCPaginationError, match="more than 2 pages"):
-        ECCCClient(session=session, max_pages=2).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session), max_pages=2).fetch((-66, 43, -59, 48))
     assert len(session.calls) == 2
 
 
@@ -349,7 +355,7 @@ def test_fetch_rejects_unsafe_or_cross_origin_pagination(href: str) -> None:
         )
     )
     with pytest.raises(ECCCPaginationError, match="pagination link"):
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
     assert len(session.calls) == 1
 
 
@@ -372,7 +378,7 @@ def test_fetch_translates_http_failures(
         FakeResponse({}, status_code=status_code, content_type="text/plain")
     )
     with pytest.raises(ECCCRequestError, match=message_fragment):
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
 
 
 @pytest.mark.parametrize(
@@ -389,7 +395,7 @@ def test_fetch_translates_network_failures(
 ) -> None:
     session = FakeSession(request_error)
     with pytest.raises(ECCCRequestError, match=message_fragment) as exc:
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))
     assert "details" not in str(exc.value)
 
 
@@ -404,13 +410,13 @@ def test_fetch_translates_network_failures(
 )
 def test_client_rejects_unsafe_api_url(api_url: str) -> None:
     with pytest.raises(ECCCConfigurationError, match="API URL"):
-        ECCCClient(api_url=api_url, session=FakeSession())
+        ECCCClient(api_url=api_url, session=as_session(FakeSession()))
 
 
 @pytest.mark.parametrize("max_pages", [0, -1, MAX_PAGES + 1, 1.5, True])
 def test_client_rejects_invalid_page_limit(max_pages: Any) -> None:
     with pytest.raises(ECCCConfigurationError, match="Page limit"):
-        ECCCClient(session=FakeSession(), max_pages=max_pages)
+        ECCCClient(session=as_session(FakeSession()), max_pages=max_pages)
 
 
 @pytest.mark.parametrize(
@@ -419,7 +425,7 @@ def test_client_rejects_invalid_page_limit(max_pages: Any) -> None:
 )
 def test_client_rejects_invalid_feature_limit(max_features: Any) -> None:
     with pytest.raises(ECCCConfigurationError, match="Feature limit"):
-        ECCCClient(session=FakeSession(), max_features=max_features)
+        ECCCClient(session=as_session(FakeSession()), max_features=max_features)
 
 
 def test_fetch_stops_before_aggregating_too_many_features() -> None:
@@ -433,7 +439,7 @@ def test_fetch_stops_before_aggregating_too_many_features() -> None:
     )
 
     with pytest.raises(ECCCResponseError, match="smaller region"):
-        ECCCClient(session=session, max_features=1).fetch(
+        ECCCClient(session=as_session(session), max_features=1).fetch(
             (-66, 43, -59, 48)
         )
 
@@ -449,4 +455,4 @@ def test_fetch_rejects_malformed_links() -> None:
         )
     )
     with pytest.raises(ECCCResponseError, match="without a URL"):
-        ECCCClient(session=session).fetch((-66, 43, -59, 48))
+        ECCCClient(session=as_session(session)).fetch((-66, 43, -59, 48))

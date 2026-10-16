@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import requests
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
@@ -71,6 +72,12 @@ class FakeSession:
         return result
 
 
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
+
+
 def test_inert_by_default() -> None:
     assert GDSPS_THREDDS_CATALOG_URL is None
     assert is_configured() is False
@@ -90,7 +97,7 @@ def test_discovers_gdsps_opendap_datasets() -> None:
         dataset_xml("Some other model", "gdps/tt.nc"),
     )
     client = GDSPSThreddsClient(
-        CATALOG_URL, session=FakeSession(FakeResponse(text=document))
+        CATALOG_URL, session=as_session(FakeSession(FakeResponse(text=document)))
     )
     datasets = client.discover_datasets()
     assert len(datasets) == 1
@@ -104,7 +111,7 @@ def test_no_opendap_service_yields_nothing() -> None:
         dataset_xml("GDSPS ETAS", "gdsps/etas.nc"), opendap=False
     )
     client = GDSPSThreddsClient(
-        CATALOG_URL, session=FakeSession(FakeResponse(text=document))
+        CATALOG_URL, session=as_session(FakeSession(FakeResponse(text=document)))
     )
     assert client.discover_datasets() == ()
 
@@ -117,7 +124,7 @@ def test_open_dataset_uses_injected_opener() -> None:
         return f"dataset::{url}"
 
     client = GDSPSThreddsClient(
-        CATALOG_URL, session=FakeSession(), opener=opener
+        CATALOG_URL, session=as_session(FakeSession()), opener=opener
     )
     dataset = GDSPSThreddsDataset(
         name="GDSPS ETAS",
@@ -134,7 +141,7 @@ def test_open_dataset_wraps_opener_errors() -> None:
         raise OSError("boom")
 
     client = GDSPSThreddsClient(
-        CATALOG_URL, session=FakeSession(), opener=opener
+        CATALOG_URL, session=as_session(FakeSession()), opener=opener
     )
     with pytest.raises(GDSPSRequestError):
         client.open_dataset("https://example-thredds.gc.ca/thredds/dodsC/x.nc")

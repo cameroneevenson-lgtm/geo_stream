@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import requests
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
@@ -75,6 +76,12 @@ class FakeSession:
         return result
 
 
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
+
+
 def test_crawls_tree_and_parses_files() -> None:
     session = FakeSession()
     session.route(
@@ -89,7 +96,7 @@ def test_crawls_tree_and_parses_files() -> None:
         f"{ROOT}{BASE}12/",
         FakeResponse(text=directory_html(etas_name("20260722T12Z"))),
     )
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     files = client.discover_files()
 
     names = [file.filename for file in files]
@@ -113,7 +120,7 @@ def test_variable_filter_limits_results() -> None:
         f"{ROOT}{BASE}",
         FakeResponse(text=directory_html(etas_name(), ssh_name())),
     )
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     ssh_files = client.discover_files(variable="ssh")
     assert [f.variable for f in ssh_files] == [SSH]
 
@@ -130,7 +137,7 @@ def test_list_runs_deduplicates_and_sorts() -> None:
             )
         ),
     )
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     runs = client.list_runs()
     assert [run.stamp for run in runs] == ["20260722T12Z", "20260722T00Z"]
 
@@ -146,7 +153,7 @@ def test_cross_origin_href_is_ignored() -> None:
             )
         ),
     )
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     files = client.discover_files()
     assert [f.filename for f in files] == [etas_name()]
     # The evil host was never requested.
@@ -160,7 +167,7 @@ def test_fetch_file_returns_bytes() -> None:
         url,
         FakeResponse(content=b"CDF\x01data", content_type="application/x-netcdf"),
     )
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     file = GDSPSDatamartFile(
         filename=etas_name(),
         url=url,
@@ -176,7 +183,7 @@ def test_fetch_file_rejects_html_body() -> None:
     session = FakeSession()
     url = f"{ROOT}{BASE}00/{etas_name()}"
     session.route(url, FakeResponse(text="<html>404</html>"))
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     file = GDSPSDatamartFile(
         filename=etas_name(),
         url=url,
@@ -192,7 +199,7 @@ def test_fetch_file_rejects_html_body() -> None:
 def test_http_error_raises_request_error() -> None:
     session = FakeSession()
     session.route(f"{ROOT}{BASE}", FakeResponse(status_code=503))
-    client = GDSPSDatamartClient(session=session, base_path=BASE)
+    client = GDSPSDatamartClient(session=as_session(session), base_path=BASE)
     with pytest.raises(GDSPSRequestError):
         client.discover_files()
 

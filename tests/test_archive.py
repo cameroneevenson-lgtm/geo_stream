@@ -6,7 +6,7 @@ from collections import deque
 from copy import deepcopy
 from datetime import date, datetime
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 import requests
@@ -108,6 +108,12 @@ class FakeSession:
         return result
 
 
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -150,7 +156,7 @@ def test_build_archive_directory_url_uses_wxo_dd_partition() -> None:
 def test_injected_session_gets_project_user_agent_and_retry_adapters() -> None:
     session = FakeSession()
 
-    ECCCArchiveClient(session=session)
+    ECCCArchiveClient(session=as_session(session))
 
     assert session.headers["User-Agent"] == USER_AGENT
     assert set(session.mounts) == {"http://", "https://"}
@@ -179,7 +185,7 @@ def test_discover_selects_latest_amendment_and_sorts_products() -> None:
         )
     )
 
-    products = ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
+    products = ECCCArchiveClient(session=as_session(session)).discover(ARCHIVE_DATE)
 
     assert [item.filename for item in products] == [second, logical_v3]
     assert products[1].version == 3
@@ -201,7 +207,7 @@ def test_discover_accepts_absolute_same_directory_official_link() -> None:
         )
     )
 
-    products = ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
+    products = ECCCArchiveClient(session=as_session(session)).discover(ARCHIVE_DATE)
 
     assert len(products) == 1
     assert products[0].url == f"{DIRECTORY_URL}{filename}"
@@ -221,7 +227,7 @@ def test_list_products_accepts_lowercase_codes_and_hour_only_lead() -> None:
         )
     )
 
-    products = ECCCDatamartArchiveClient(session=session).list_products(
+    products = ECCCDatamartArchiveClient(session=as_session(session)).list_products(
         ARCHIVE_DATE
     )
 
@@ -257,7 +263,7 @@ def test_list_products_deduplicates_equivalent_lead_spelling_and_code_case() -> 
         )
     )
 
-    products = ECCCDatamartArchiveClient(session=session).list_products(
+    products = ECCCDatamartArchiveClient(session=as_session(session)).list_products(
         ARCHIVE_DATE
     )
 
@@ -297,7 +303,7 @@ def test_discover_ignores_unsafe_or_nonofficial_links(
         )
     )
 
-    assert ECCCArchiveClient(session=session).discover(ARCHIVE_DATE) == ()
+    assert ECCCArchiveClient(session=as_session(session)).discover(ARCHIVE_DATE) == ()
 
 
 def test_fetch_merges_selected_files_into_fresh_feature_collection() -> None:
@@ -333,7 +339,7 @@ def test_fetch_merges_selected_files_into_fresh_feature_collection() -> None:
         ),
     )
 
-    result = ECCCArchiveClient(session=session).fetch(ARCHIVE_DATE)
+    result = ECCCArchiveClient(session=as_session(session)).fetch(ARCHIVE_DATE)
 
     assert result == {
         "type": "FeatureCollection",
@@ -381,7 +387,7 @@ def test_fetch_date_retains_raw_documents_without_shared_feature_mutation() -> N
         FakeResponse(payload),
     )
 
-    result = ECCCDatamartArchiveClient(session=session).fetch_date(
+    result = ECCCDatamartArchiveClient(session=as_session(session)).fetch_date(
         ARCHIVE_DATE
     )
 
@@ -415,7 +421,7 @@ def test_raw_bundle_bytes_is_strict_utf8_json_and_does_not_mutate_payload() -> N
         ),
         FakeResponse(payload),
     )
-    result = ECCCDatamartArchiveClient(session=session).fetch_date(
+    result = ECCCDatamartArchiveClient(session=as_session(session)).fetch_date(
         ARCHIVE_DATE
     )
     before = deepcopy(result.documents[0].payload)
@@ -462,7 +468,7 @@ def test_fetch_preserves_feature_ids_properties_and_malformed_entries() -> None:
         ),
     )
 
-    result = ECCCArchiveClient(session=session).fetch(ARCHIVE_DATE)
+    result = ECCCArchiveClient(session=as_session(session)).fetch(ARCHIVE_DATE)
 
     assert result["features"] == entries
     assert result["features"][0]["id"] == "kept"
@@ -478,7 +484,7 @@ def test_fetch_reports_directory_without_official_products() -> None:
     )
 
     with pytest.raises(ECCCArchiveDirectoryError, match="did not list"):
-        ECCCArchiveClient(session=session).fetch(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).fetch(ARCHIVE_DATE)
     assert len(session.calls) == 1
 
 
@@ -488,7 +494,7 @@ def test_discover_rejects_non_html_directory(content_type: str) -> None:
         FakeResponse(text="<html></html>", content_type=content_type)
     )
     with pytest.raises(ECCCArchiveDirectoryError, match="did not return HTML"):
-        ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).discover(ARCHIVE_DATE)
 
 
 @pytest.mark.parametrize(
@@ -510,7 +516,7 @@ def test_fetch_rejects_malformed_feature_collection(payload: Any) -> None:
         FakeResponse(payload),
     )
     with pytest.raises(ECCCArchiveResponseError):
-        ECCCArchiveClient(session=session).fetch(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).fetch(ARCHIVE_DATE)
 
 
 def test_fetch_rejects_invalid_product_json_without_leaking_details() -> None:
@@ -528,7 +534,7 @@ def test_fetch_rejects_invalid_product_json_without_leaking_details() -> None:
         ECCCArchiveResponseError,
         match="did not contain valid JSON",
     ) as exc:
-        ECCCArchiveClient(session=session).fetch(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).fetch(ARCHIVE_DATE)
     assert "private decoder detail" not in str(exc.value)
 
 
@@ -545,7 +551,7 @@ def test_fetch_rejects_unsupported_product_content_type() -> None:
         ),
     )
     with pytest.raises(ECCCArchiveResponseError, match="content type"):
-        ECCCArchiveClient(session=session).fetch(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).fetch(ARCHIVE_DATE)
 
 
 @pytest.mark.parametrize(
@@ -567,7 +573,7 @@ def test_request_translates_http_errors(
         FakeResponse(status_code=status_code, content_type="text/plain")
     )
     with pytest.raises(ECCCArchiveRequestError, match=message_fragment) as exc:
-        ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).discover(ARCHIVE_DATE)
     assert exc.value.status_code == status_code
     assert exc.value.systemic is systemic
 
@@ -586,7 +592,7 @@ def test_request_translates_network_errors(
 ) -> None:
     session = FakeSession(request_error)
     with pytest.raises(ECCCArchiveRequestError, match=message_fragment) as exc:
-        ECCCArchiveClient(session=session).discover(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session)).discover(ARCHIVE_DATE)
     assert "details" not in str(exc.value)
     assert exc.value.status_code is None
     assert exc.value.systemic is True
@@ -606,7 +612,7 @@ def test_discover_stops_when_directory_has_too_many_logical_products() -> None:
         )
     )
     with pytest.raises(ECCCArchiveDirectoryError, match="more than 1"):
-        ECCCArchiveClient(session=session, max_files=1).discover(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session), max_files=1).discover(ARCHIVE_DATE)
 
 
 def test_fetch_stops_before_aggregating_too_many_features() -> None:
@@ -624,7 +630,7 @@ def test_fetch_stops_before_aggregating_too_many_features() -> None:
         ),
     )
     with pytest.raises(ECCCArchiveResponseError, match="more than 1"):
-        ECCCArchiveClient(session=session, max_features=1).fetch(ARCHIVE_DATE)
+        ECCCArchiveClient(session=as_session(session), max_features=1).fetch(ARCHIVE_DATE)
 
 
 @pytest.mark.parametrize(
@@ -642,7 +648,7 @@ def test_client_rejects_unsafe_archive_root(archive_root: str) -> None:
     with pytest.raises(ECCCArchiveConfigurationError, match="archive root"):
         ECCCArchiveClient(
             archive_root=archive_root,
-            session=FakeSession(),
+            session=as_session(FakeSession()),
         )
 
 
@@ -664,4 +670,4 @@ def test_client_rejects_invalid_limits(
 ) -> None:
     kwargs = {argument: value}
     with pytest.raises(ECCCArchiveConfigurationError, match=message_fragment):
-        ECCCArchiveClient(session=FakeSession(), **kwargs)
+        ECCCArchiveClient(session=as_session(FakeSession()), **kwargs)

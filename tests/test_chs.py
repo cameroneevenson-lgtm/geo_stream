@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 import pytest
@@ -88,6 +88,12 @@ class FakeSession:
         if isinstance(result, BaseException):
             raise result
         return result
+
+
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
 
 
 def station_payload(
@@ -216,7 +222,7 @@ def test_fetch_catalog_uses_official_filter_and_keeps_only_operating_wlo() -> No
     )
 
     result = CHSClient(
-        session=session,
+        session=as_session(session),
         clock=lambda: ANCHOR,
     ).fetch_catalog()
 
@@ -246,7 +252,7 @@ def test_fetch_catalog_is_stably_sorted_and_deduplicated_by_id() -> None:
         station_payload(station_id=same_id, name="Alpha", code="00001"),
     ]
     result = CHSClient(
-        session=FakeSession(FakeResponse(payload)),
+        session=as_session(FakeSession(FakeResponse(payload))),
         clock=lambda: ANCHOR,
     ).fetch_catalog()
 
@@ -258,8 +264,10 @@ def test_fetch_catalog_is_stably_sorted_and_deduplicated_by_id() -> None:
 
 def test_fetch_catalog_raises_when_every_station_is_unusable() -> None:
     client = CHSClient(
-        session=FakeSession(
-            FakeResponse([station_payload(operating=False), {}])
+        session=as_session(
+            FakeSession(
+                FakeResponse([station_payload(operating=False), {}])
+            )
         ),
         clock=lambda: ANCHOR,
     )
@@ -279,7 +287,7 @@ def test_fetch_catalog_raises_when_every_station_is_unusable() -> None:
 )
 def test_client_rejects_unsafe_api_roots(api_root: str) -> None:
     with pytest.raises(CHSConfigurationError, match="API root"):
-        CHSClient(api_root=api_root, session=FakeSession())
+        CHSClient(api_root=api_root, session=as_session(FakeSession()))
 
 
 @pytest.mark.parametrize(
@@ -322,7 +330,7 @@ def test_catalog_validates_media_status_json_and_list(
     error_type: type[Exception],
     message: str,
 ) -> None:
-    client = CHSClient(session=FakeSession(response))
+    client = CHSClient(session=as_session(FakeSession(response)))
     with pytest.raises(error_type, match=message) as exc:
         client.fetch_catalog()
     assert "secret decoder detail" not in str(exc.value)
@@ -340,7 +348,7 @@ def test_catalog_translates_network_errors(
     failure: requests.RequestException,
     message: str,
 ) -> None:
-    client = CHSClient(session=FakeSession(failure))
+    client = CHSClient(session=as_session(FakeSession(failure)))
     with pytest.raises(CHSRequestError, match=message) as exc:
         client.fetch_catalog()
     assert "details" not in str(exc.value)
@@ -368,7 +376,7 @@ def test_fetch_bundle_requests_rate_safe_windows_and_normalizes_points() -> None
     )
 
     result = CHSClient(
-        session=session,
+        session=as_session(session),
         clock=lambda: ANCHOR,
     ).fetch_bundle(station(), ANCHOR)
 
@@ -421,7 +429,7 @@ def test_fetch_bundle_keeps_prediction_when_observation_request_fails() -> None:
     )
 
     result = CHSClient(
-        session=session,
+        session=as_session(session),
         clock=lambda: ANCHOR,
     ).fetch_bundle(station(), ANCHOR)
 
@@ -439,7 +447,7 @@ def test_fetch_bundle_skips_prediction_request_when_not_advertised() -> None:
         FakeResponse([raw_point("2026-07-23T12:00:00Z", 1.0)])
     )
     result = CHSClient(
-        session=session,
+        session=as_session(session),
         clock=lambda: ANCHOR,
     ).fetch_bundle(station(series=("wlo",)), ANCHOR)
 
@@ -451,7 +459,7 @@ def test_fetch_bundle_skips_prediction_request_when_not_advertised() -> None:
 
 def test_fetch_bundle_raises_when_all_requested_series_are_empty() -> None:
     client = CHSClient(
-        session=FakeSession(FakeResponse([]), FakeResponse([])),
+        session=as_session(FakeSession(FakeResponse([]), FakeResponse([]))),
         clock=lambda: ANCHOR,
     )
     with pytest.raises(
@@ -464,12 +472,12 @@ def test_fetch_bundle_raises_when_all_requested_series_are_empty() -> None:
 
 def test_fetch_bundle_requires_operating_observation_station() -> None:
     with pytest.raises(CHSConfigurationError, match="operating CHS"):
-        CHSClient(session=FakeSession()).fetch_bundle(
+        CHSClient(session=as_session(FakeSession())).fetch_bundle(
             station(operating=False),
             ANCHOR,
         )
     with pytest.raises(CHSConfigurationError, match="operating CHS"):
-        CHSClient(session=FakeSession()).fetch_bundle(
+        CHSClient(session=as_session(FakeSession())).fetch_bundle(
             station(series=("wlp",)),
             ANCHOR,
         )
@@ -500,8 +508,10 @@ def test_anchor_is_normalized_to_utc_and_injected_clock_is_floored() -> None:
     ) == ANCHOR
 
     client = CHSClient(
-        session=FakeSession(
-            FakeResponse([raw_point("2026-07-23T12:00:00Z", 1.0)]),
+        session=as_session(
+            FakeSession(
+                FakeResponse([raw_point("2026-07-23T12:00:00Z", 1.0)]),
+            )
         ),
         clock=lambda: datetime(2026, 7, 23, 12, 14, 59, tzinfo=UTC),
     )
@@ -646,7 +656,7 @@ def test_chart_frame_is_stable_wide_utc_frame() -> None:
 def test_raw_bundle_contains_station_queries_and_unmodified_responses() -> None:
     source = [raw_point("2026-07-23T12:00:00Z", 1.234)]
     result = CHSClient(
-        session=FakeSession(FakeResponse(source)),
+        session=as_session(FakeSession(FakeResponse(source))),
         clock=lambda: ANCHOR,
     ).fetch_bundle(station(series=("wlo",)), ANCHOR)
 
@@ -670,7 +680,7 @@ def test_raw_bundle_contains_station_queries_and_unmodified_responses() -> None:
 
 def test_non_json_nan_in_response_is_rejected_before_raw_storage() -> None:
     client = CHSClient(
-        session=FakeSession(FakeResponse([{"value": float("nan")}])),
+        session=as_session(FakeSession(FakeResponse([{"value": float("nan")}]))),
         clock=lambda: ANCHOR,
     )
     with pytest.raises(CHSDataUnavailableError) as exc:

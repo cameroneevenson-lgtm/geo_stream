@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import requests
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
@@ -81,13 +82,19 @@ class FakeSession:
         return result
 
 
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
+
+
 def test_discovers_gdsps_coverages() -> None:
     document = capabilities(
         coverage_summary("GDSPS.ETAS", "Storm surge elevation"),
         coverage_summary("GDSPS.SSH", "Total water level"),
         coverage_summary("GDPS.TT", "Air temperature"),
     )
-    client = GDSPSWCSClient(session=FakeSession(FakeResponse(text=document)))
+    client = GDSPSWCSClient(session=as_session(FakeSession(FakeResponse(text=document))))
     coverages = client.discover_coverages()
     assert [c.coverage_id for c in coverages] == ["GDSPS.ETAS", "GDSPS.SSH"]
     assert coverages[0].variable == ETAS
@@ -132,7 +139,7 @@ def test_fetch_coverage_builds_subset_and_returns_bytes() -> None:
     session = FakeSession(
         FakeResponse(content=netcdf, content_type="application/x-netcdf")
     )
-    client = GDSPSWCSClient(session=session)
+    client = GDSPSWCSClient(session=as_session(session))
     coverage = GDSPSCoverageInfo(
         coverage_id="GDSPS.ETAS", title="t", variable=ETAS
     )
@@ -160,7 +167,7 @@ def test_fetch_coverage_detects_exception_report() -> None:
         "</ows:Exception></ows:ExceptionReport>"
     )
     session = FakeSession(FakeResponse(text=report, content_type="text/xml"))
-    client = GDSPSWCSClient(session=session)
+    client = GDSPSWCSClient(session=as_session(session))
     coverage = GDSPSCoverageInfo(
         coverage_id="GDSPS.ETAS", title="t", variable=ETAS
     )
@@ -169,7 +176,7 @@ def test_fetch_coverage_detects_exception_report() -> None:
 
 
 def test_fetch_coverage_rejects_bad_bbox() -> None:
-    client = GDSPSWCSClient(session=FakeSession())
+    client = GDSPSWCSClient(session=as_session(FakeSession()))
     coverage = GDSPSCoverageInfo(
         coverage_id="GDSPS.ETAS", title="t", variable=ETAS
     )
@@ -178,7 +185,7 @@ def test_fetch_coverage_rejects_bad_bbox() -> None:
 
 
 def test_http_error_raises_request_error() -> None:
-    client = GDSPSWCSClient(session=FakeSession(FakeResponse(status_code=500)))
+    client = GDSPSWCSClient(session=as_session(FakeSession(FakeResponse(status_code=500))))
     with pytest.raises(GDSPSRequestError):
         client.discover_coverages()
 
@@ -187,7 +194,7 @@ def test_unsupported_coverage_media_type_rejected() -> None:
     session = FakeSession(
         FakeResponse(content=b"junk", content_type="text/plain")
     )
-    client = GDSPSWCSClient(session=session)
+    client = GDSPSWCSClient(session=as_session(session))
     coverage = GDSPSCoverageInfo(
         coverage_id="GDSPS.ETAS", title="t", variable=ETAS
     )

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import pytest
+import requests
 
 from coastal_flood_explorer.gdsps_common import (
     ETAS,
@@ -78,6 +79,12 @@ class FakeSession:
         return result
 
 
+def as_session(fake: FakeSession) -> requests.Session:
+    """Present the fake as the Session type the client under test expects."""
+
+    return cast(requests.Session, fake)
+
+
 def test_discovers_gdsps_layers_and_times() -> None:
     document = capabilities(
         layer_xml(
@@ -93,7 +100,7 @@ def test_discovers_gdsps_layers_and_times() -> None:
         layer_xml("GDPS.ETA_TT", "Air temperature"),
     )
     session = FakeSession(FakeResponse(text=document))
-    client = GDSPSWMSClient(session=session)
+    client = GDSPSWMSClient(session=as_session(session))
     layers = client.discover_layers()
 
     assert [layer.name for layer in layers] == ["GDSPS.ETAS", "GDSPS.SSH"]
@@ -145,7 +152,7 @@ def test_discovery_separates_gdsps_and_resps_and_drops_non_data() -> None:
         layer_xml("Storm_Surge-Dis", "Storm surge legend", times),  # no model
     )
     layers = GDSPSWMSClient(
-        session=FakeSession(FakeResponse(text=document))
+        session=as_session(FakeSession(FakeResponse(text=document)))
     ).discover_layers()
     by_name = {layer.name: layer for layer in layers}
 
@@ -185,7 +192,7 @@ def test_discovery_captures_bbox_and_reference_time() -> None:
         "</Layer>"
     )
     (found,) = GDSPSWMSClient(
-        session=FakeSession(FakeResponse(text=capabilities(layer)))
+        session=as_session(FakeSession(FakeResponse(text=capabilities(layer))))
     ).discover_layers()
 
     assert found.bbox == (-72.04, 41.96, -44.29, 60.04)
@@ -198,20 +205,20 @@ def test_discovery_captures_bbox_and_reference_time() -> None:
 
 def test_no_matching_layers_is_empty_not_error() -> None:
     document = capabilities(layer_xml("GDPS.ETA_TT", "Air temperature"))
-    client = GDSPSWMSClient(session=FakeSession(FakeResponse(text=document)))
+    client = GDSPSWMSClient(session=as_session(FakeSession(FakeResponse(text=document))))
     assert client.discover_layers() == ()
 
 
 def test_non_xml_content_type_is_rejected() -> None:
     client = GDSPSWMSClient(
-        session=FakeSession(FakeResponse(text="<html/>", content_type="text/html"))
+        session=as_session(FakeSession(FakeResponse(text="<html/>", content_type="text/html")))
     )
     with pytest.raises(GDSPSDiscoveryError):
         client.discover_layers()
 
 
 def test_http_error_status_raises_request_error() -> None:
-    client = GDSPSWMSClient(session=FakeSession(FakeResponse(status_code=503)))
+    client = GDSPSWMSClient(session=as_session(FakeSession(FakeResponse(status_code=503))))
     with pytest.raises(GDSPSRequestError):
         client.discover_layers()
 

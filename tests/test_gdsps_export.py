@@ -6,6 +6,7 @@ import io
 import json
 import zipfile
 from datetime import datetime, timezone
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -141,7 +142,7 @@ def test_csv_has_point_series() -> None:
 
 
 def test_deterministic_for_identical_inputs() -> None:
-    kwargs = dict(
+    kwargs: dict[str, Any] = dict(
         roi=ROI,
         source_service="GeoMet WCS",
         generated_at=datetime(2026, 7, 22, 6, tzinfo=timezone.utc),

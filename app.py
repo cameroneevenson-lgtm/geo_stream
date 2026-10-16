@@ -14,6 +14,7 @@ from urllib.parse import quote
 from uuid import uuid4
 
 import streamlit as st
+from streamlit.delta_generator import DeltaGenerator
 from streamlit_folium import st_folium
 
 from coastal_flood_explorer.animation import (
@@ -1647,6 +1648,320 @@ def _render_feedback_form() -> None:
             st.session_state["feedback_submission_in_progress"] = False
 
 
+def _collect_archive_dates(
+    requested_dates: tuple[str, ...],
+    date_progress: DeltaGenerator,
+    date_message: DeltaGenerator,
+) -> tuple[list[tuple[str, ArchiveFetchResult]], list[tuple[str, str]]]:
+    """Fetch every requested issue date, stopping at failures or limits."""
+
+    successes: list[tuple[str, ArchiveFetchResult]] = []
+    failures: list[tuple[str, str]] = []
+    product_urls: set[str] = set()
+    document_urls: set[str] = set()
+    range_feature_count = 0
+    for index, issue_date in enumerate(
+        requested_dates,
+        start=1,
+    ):
+        display_date = datetime.strptime(
+            issue_date,
+            "%Y%m%d",
+        ).date().isoformat()
+        date_message.write(
+            f"Checking {display_date} "
+            f"({index}/{len(requested_dates)})…"
+        )
+        (
+            daily_result,
+            daily_error,
+            systemic_failure,
+        ) = _cached_archive_fetch(
+            ARCHIVE_BASE_URL,
+            issue_date,
+        )
+        if daily_result is None:
+            failures.append(
+                (
+                    issue_date,
+                    daily_error
+                    or "The archive date could not be loaded.",
+                )
+            )
+            if systemic_failure:
+                skipped_message = (
+                    "Not attempted after a systemic ECCC "
+                    "archive service failure."
+                )
+                failures.extend(
+                    (remaining_date, skipped_message)
+                    for remaining_date in requested_dates[index:]
+                )
+                date_progress.progress(
+                    1.0,
+                    text=(
+                        "Stopped the remaining dates after "
+                        "an ECCC service failure"
+                    ),
+                )
+                break
+        else:
+            daily_features = daily_result.collection.get(
+                "features"
+            )
+            if not isinstance(daily_features, list):
+                raise ArchiveError(
+                    "An ECCC archive date returned an invalid "
+                    "FeatureCollection. The previous results "
+                    "were kept."
+                )
+            next_product_urls = product_urls | {
+                product.url
+                for product in daily_result.products
+            }
+            next_document_urls = document_urls | {
+                document.product.url
+                for document in daily_result.documents
+            }
+            next_feature_count = (
+                range_feature_count + len(daily_features)
+            )
+            limit_message: str | None = None
+            if (
+                len(next_product_urls) > MAX_ARCHIVE_FILES
+                or len(next_document_urls) > MAX_ARCHIVE_FILES
+            ):
+                limit_message = (
+                    "Not included because the selected range "
+                    f"would exceed the {MAX_ARCHIVE_FILES}-file "
+                    "safety limit."
+                )
+            elif next_feature_count > MAX_TOTAL_FEATURES:
+                limit_message = (
+                    "Not included because the selected range "
+                    "would exceed the "
+                    f"{MAX_TOTAL_FEATURES}-feature safety limit."
+                )
+            if limit_message is not None:
+                failures.append((issue_date, limit_message))
+                skipped_message = (
+                    "Not attempted after the archive range "
+                    "reached a safety limit."
+                )
+                failures.extend(
+                    (remaining_date, skipped_message)
+                    for remaining_date in requested_dates[index:]
+                )
+                date_progress.progress(
+                    1.0,
+                    text=(
+                        "Stopped the remaining dates at the "
+                        "archive range safety limit"
+                    ),
+                )
+                break
+
+            successes.append((issue_date, daily_result))
+            product_urls = next_product_urls
+            document_urls = next_document_urls
+            range_feature_count = next_feature_count
+            reached_limit = (
+                len(product_urls) == MAX_ARCHIVE_FILES
+                or len(document_urls) == MAX_ARCHIVE_FILES
+                or range_feature_count == MAX_TOTAL_FEATURES
+            )
+            if reached_limit and index < len(requested_dates):
+                skipped_message = (
+                    "Not attempted because the archive range "
+                    "reached a safety limit."
+                )
+                failures.extend(
+                    (remaining_date, skipped_message)
+                    for remaining_date in requested_dates[index:]
+                )
+                date_progress.progress(
+                    1.0,
+                    text=(
+                        "Stopped the remaining dates at the "
+                        "archive range safety limit"
+                    ),
+                )
+                break
+        date_progress.progress(
+            index / len(requested_dates),
+            text=(
+                f"Checked {index} of "
+                f"{len(requested_dates)} issue dates"
+            ),
+        )
+    return successes, failures
+
+
+def _fetch_archive_range(
+    bbox: tuple[float, float, float, float],
+    requested_range: tuple[date, date],
+) -> str | None:
+    """Fetch, clip and store an archive range; return any error to show."""
+
+    action_error: str | None = None
+    active_roi = st.session_state.get("active_roi")
+    range_start, range_end = requested_range
+    requested_dates = inclusive_archive_dates(
+        range_start,
+        range_end,
+    )
+    fetch_progress = st.status(
+        "Fetching ECCC archive date range…",
+        expanded=True,
+        state="running",
+    )
+    try:
+        with fetch_progress:
+            date_progress = st.progress(
+                0.0,
+                text=(
+                    f"Preparing {len(requested_dates)} daily archive "
+                    "partition(s)…"
+                ),
+            )
+            date_message = st.empty()
+            successes, failures = _collect_archive_dates(
+                requested_dates,
+                date_progress,
+                date_message,
+            )
+
+            archive_result = combine_archive_range(
+                range_start,
+                range_end,
+                successes=successes,
+                failures=failures,
+            )
+            if archive_result.successful_date_count == 0:
+                raise ArchiveError(
+                    "None of the selected ECCC archive dates could be "
+                    "loaded. The previous results were kept."
+                )
+            date_message.write(
+                f"Loaded {archive_result.successful_date_count} of "
+                f"{archive_result.requested_date_count} issue dates."
+            )
+            st.write(
+                f"Validated {len(archive_result.products)} archived "
+                "forecast file(s) across the range."
+            )
+            st.write(
+                "Clipping their polygons locally to the exact region…"
+            )
+            clipped = clip_feature_collection(
+                archive_result.collection,
+                active_roi,
+            )
+        _store_dataset(
+            raw_response=archive_result.collection,
+            clipped_data=clipped.feature_collection,
+            bbox=bbox,
+            roi=active_roi,
+            source_mode="archive",
+            warnings=clipped.warnings,
+            archive_range=requested_range,
+            archive_product_count=len(archive_result.products),
+            archive_requested_date_count=(
+                archive_result.requested_date_count
+            ),
+            archive_successful_date_count=(
+                archive_result.successful_date_count
+            ),
+            archive_date_failures=_archive_failure_details(
+                archive_result
+            ),
+            raw_archive_download=raw_range_bundle_bytes(
+                archive_result,
+            ),
+        )
+        failed_count = archive_result.failed_date_count
+        range_completion = (
+            f"loaded partially with {failed_count} "
+            f"{'date' if failed_count == 1 else 'dates'} not loaded"
+            if failed_count
+            else "fetch complete"
+        )
+        fetch_progress.update(
+            label=(
+                f"ECCC archive range {range_completion} — "
+                f"{archive_result.successful_date_count}/"
+                f"{archive_result.requested_date_count} date(s), "
+                f"{len(archive_result.products)} file(s), "
+                f"{st.session_state['raw_feature_count']} feature(s), "
+                f"{st.session_state['clipped_feature_count']} intersected "
+                "the region"
+            ),
+            state="complete",
+            expanded=False,
+        )
+    except (ArchiveError, GeometryError) as exc:
+        LOGGER.warning("Archive fetch failed: %s", exc, exc_info=True)
+        action_error = str(exc)
+        fetch_progress.update(
+            label=(
+                "ECCC archive fetch failed — previous results were kept"
+            ),
+            state="error",
+            expanded=True,
+        )
+    except Exception:
+        LOGGER.exception(
+            "Unexpected failure while fetching the ECCC archive"
+        )
+        action_error = (
+            "An unexpected error occurred while processing the ECCC "
+            "archive. The previous results were kept."
+        )
+        fetch_progress.update(
+            label=(
+                "ECCC archive fetch failed — previous results were kept"
+            ),
+            state="error",
+            expanded=True,
+        )
+
+    return action_error
+
+
+def _generate_synthetic_dataset(
+    bbox: tuple[float, float, float, float],
+) -> str | None:
+    """Generate and store synthetic test data; return any error to show."""
+
+    action_error: str | None = None
+    active_roi = st.session_state.get("active_roi")
+    try:
+        generated = generate_synthetic_data(active_roi)
+        clipped = clip_feature_collection(generated, active_roi)
+        _store_dataset(
+            raw_response=generated,
+            clipped_data=clipped.feature_collection,
+            bbox=bbox,
+            roi=active_roi,
+            source_mode="synthetic",
+            warnings=clipped.warnings,
+        )
+    except GeometryError as exc:
+        LOGGER.warning(
+            "Synthetic generation failed: %s",
+            exc,
+            exc_info=True,
+        )
+        action_error = str(exc)
+    except Exception:
+        LOGGER.exception("Unexpected synthetic-data failure")
+        action_error = (
+            "Synthetic test data could not be generated for this ROI."
+        )
+
+    return action_error
+
+
 def _render_sidebar() -> tuple[FilterCriteria, str | None]:
     action_error: str | None = None
     bbox = _current_bbox()
@@ -1740,288 +2055,10 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
             and bbox is not None
             and requested_range is not None
         ):
-            active_roi = st.session_state.get("active_roi")
-            range_start, range_end = requested_range
-            requested_dates = inclusive_archive_dates(
-                range_start,
-                range_end,
-            )
-            fetch_progress = st.status(
-                "Fetching ECCC archive date range…",
-                expanded=True,
-                state="running",
-            )
-            try:
-                with fetch_progress:
-                    date_progress = st.progress(
-                        0.0,
-                        text=(
-                            f"Preparing {len(requested_dates)} daily archive "
-                            "partition(s)…"
-                        ),
-                    )
-                    date_message = st.empty()
-                    successes: list[
-                        tuple[str, ArchiveFetchResult]
-                    ] = []
-                    failures: list[tuple[str, str]] = []
-                    product_urls: set[str] = set()
-                    document_urls: set[str] = set()
-                    range_feature_count = 0
-                    for index, issue_date in enumerate(
-                        requested_dates,
-                        start=1,
-                    ):
-                        display_date = datetime.strptime(
-                            issue_date,
-                            "%Y%m%d",
-                        ).date().isoformat()
-                        date_message.write(
-                            f"Checking {display_date} "
-                            f"({index}/{len(requested_dates)})…"
-                        )
-                        (
-                            daily_result,
-                            daily_error,
-                            systemic_failure,
-                        ) = _cached_archive_fetch(
-                            ARCHIVE_BASE_URL,
-                            issue_date,
-                        )
-                        if daily_result is None:
-                            failures.append(
-                                (
-                                    issue_date,
-                                    daily_error
-                                    or "The archive date could not be loaded.",
-                                )
-                            )
-                            if systemic_failure:
-                                skipped_message = (
-                                    "Not attempted after a systemic ECCC "
-                                    "archive service failure."
-                                )
-                                failures.extend(
-                                    (remaining_date, skipped_message)
-                                    for remaining_date in requested_dates[index:]
-                                )
-                                date_progress.progress(
-                                    1.0,
-                                    text=(
-                                        "Stopped the remaining dates after "
-                                        "an ECCC service failure"
-                                    ),
-                                )
-                                break
-                        else:
-                            daily_features = daily_result.collection.get(
-                                "features"
-                            )
-                            if not isinstance(daily_features, list):
-                                raise ArchiveError(
-                                    "An ECCC archive date returned an invalid "
-                                    "FeatureCollection. The previous results "
-                                    "were kept."
-                                )
-                            next_product_urls = product_urls | {
-                                product.url
-                                for product in daily_result.products
-                            }
-                            next_document_urls = document_urls | {
-                                document.product.url
-                                for document in daily_result.documents
-                            }
-                            next_feature_count = (
-                                range_feature_count + len(daily_features)
-                            )
-                            limit_message: str | None = None
-                            if (
-                                len(next_product_urls) > MAX_ARCHIVE_FILES
-                                or len(next_document_urls) > MAX_ARCHIVE_FILES
-                            ):
-                                limit_message = (
-                                    "Not included because the selected range "
-                                    f"would exceed the {MAX_ARCHIVE_FILES}-file "
-                                    "safety limit."
-                                )
-                            elif next_feature_count > MAX_TOTAL_FEATURES:
-                                limit_message = (
-                                    "Not included because the selected range "
-                                    "would exceed the "
-                                    f"{MAX_TOTAL_FEATURES}-feature safety limit."
-                                )
-                            if limit_message is not None:
-                                failures.append((issue_date, limit_message))
-                                skipped_message = (
-                                    "Not attempted after the archive range "
-                                    "reached a safety limit."
-                                )
-                                failures.extend(
-                                    (remaining_date, skipped_message)
-                                    for remaining_date in requested_dates[index:]
-                                )
-                                date_progress.progress(
-                                    1.0,
-                                    text=(
-                                        "Stopped the remaining dates at the "
-                                        "archive range safety limit"
-                                    ),
-                                )
-                                break
-
-                            successes.append((issue_date, daily_result))
-                            product_urls = next_product_urls
-                            document_urls = next_document_urls
-                            range_feature_count = next_feature_count
-                            reached_limit = (
-                                len(product_urls) == MAX_ARCHIVE_FILES
-                                or len(document_urls) == MAX_ARCHIVE_FILES
-                                or range_feature_count == MAX_TOTAL_FEATURES
-                            )
-                            if reached_limit and index < len(requested_dates):
-                                skipped_message = (
-                                    "Not attempted because the archive range "
-                                    "reached a safety limit."
-                                )
-                                failures.extend(
-                                    (remaining_date, skipped_message)
-                                    for remaining_date in requested_dates[index:]
-                                )
-                                date_progress.progress(
-                                    1.0,
-                                    text=(
-                                        "Stopped the remaining dates at the "
-                                        "archive range safety limit"
-                                    ),
-                                )
-                                break
-                        date_progress.progress(
-                            index / len(requested_dates),
-                            text=(
-                                f"Checked {index} of "
-                                f"{len(requested_dates)} issue dates"
-                            ),
-                        )
-
-                    archive_result = combine_archive_range(
-                        range_start,
-                        range_end,
-                        successes=successes,
-                        failures=failures,
-                    )
-                    if archive_result.successful_date_count == 0:
-                        raise ArchiveError(
-                            "None of the selected ECCC archive dates could be "
-                            "loaded. The previous results were kept."
-                        )
-                    date_message.write(
-                        f"Loaded {archive_result.successful_date_count} of "
-                        f"{archive_result.requested_date_count} issue dates."
-                    )
-                    st.write(
-                        f"Validated {len(archive_result.products)} archived "
-                        "forecast file(s) across the range."
-                    )
-                    st.write(
-                        "Clipping their polygons locally to the exact region…"
-                    )
-                    clipped = clip_feature_collection(
-                        archive_result.collection,
-                        active_roi,
-                    )
-                _store_dataset(
-                    raw_response=archive_result.collection,
-                    clipped_data=clipped.feature_collection,
-                    bbox=bbox,
-                    roi=active_roi,
-                    source_mode="archive",
-                    warnings=clipped.warnings,
-                    archive_range=requested_range,
-                    archive_product_count=len(archive_result.products),
-                    archive_requested_date_count=(
-                        archive_result.requested_date_count
-                    ),
-                    archive_successful_date_count=(
-                        archive_result.successful_date_count
-                    ),
-                    archive_date_failures=_archive_failure_details(
-                        archive_result
-                    ),
-                    raw_archive_download=raw_range_bundle_bytes(
-                        archive_result,
-                    ),
-                )
-                failed_count = archive_result.failed_date_count
-                range_completion = (
-                    f"loaded partially with {failed_count} "
-                    f"{'date' if failed_count == 1 else 'dates'} not loaded"
-                    if failed_count
-                    else "fetch complete"
-                )
-                fetch_progress.update(
-                    label=(
-                        f"ECCC archive range {range_completion} — "
-                        f"{archive_result.successful_date_count}/"
-                        f"{archive_result.requested_date_count} date(s), "
-                        f"{len(archive_result.products)} file(s), "
-                        f"{st.session_state['raw_feature_count']} feature(s), "
-                        f"{st.session_state['clipped_feature_count']} intersected "
-                        "the region"
-                    ),
-                    state="complete",
-                    expanded=False,
-                )
-            except (ArchiveError, GeometryError) as exc:
-                LOGGER.warning("Archive fetch failed: %s", exc, exc_info=True)
-                action_error = str(exc)
-                fetch_progress.update(
-                    label=(
-                        "ECCC archive fetch failed — previous results were kept"
-                    ),
-                    state="error",
-                    expanded=True,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "Unexpected failure while fetching the ECCC archive"
-                )
-                action_error = (
-                    "An unexpected error occurred while processing the ECCC "
-                    "archive. The previous results were kept."
-                )
-                fetch_progress.update(
-                    label=(
-                        "ECCC archive fetch failed — previous results were kept"
-                    ),
-                    state="error",
-                    expanded=True,
-                )
+            action_error = _fetch_archive_range(bbox, requested_range)
 
         if generate_synthetic and bbox is not None:
-            active_roi = st.session_state.get("active_roi")
-            try:
-                generated = generate_synthetic_data(active_roi)
-                clipped = clip_feature_collection(generated, active_roi)
-                _store_dataset(
-                    raw_response=generated,
-                    clipped_data=clipped.feature_collection,
-                    bbox=bbox,
-                    roi=active_roi,
-                    source_mode="synthetic",
-                    warnings=clipped.warnings,
-                )
-            except GeometryError as exc:
-                LOGGER.warning(
-                    "Synthetic generation failed: %s",
-                    exc,
-                    exc_info=True,
-                )
-                action_error = str(exc)
-            except Exception:
-                LOGGER.exception("Unexpected synthetic-data failure")
-                action_error = (
-                    "Synthetic test data could not be generated for this ROI."
-                )
+            action_error = _generate_synthetic_dataset(bbox) or action_error
 
         _render_gdsps_controls(bbox, st.session_state.get("active_roi"))
 

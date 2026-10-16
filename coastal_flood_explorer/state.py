@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from coastal_flood_explorer.geometry import GeometryError, parse_roi
 
@@ -75,6 +75,9 @@ def roi_matches(left: object, right: object) -> bool:
     if left is None or right is None:
         return False
     try:
-        return bool(parse_roi(left).equals(parse_roi(right)))
+        # parse_roi validates its input and raises GeometryError for non-ROIs.
+        return bool(
+            parse_roi(cast(Any, left)).equals(parse_roi(cast(Any, right)))
+        )
     except GeometryError:
         return False

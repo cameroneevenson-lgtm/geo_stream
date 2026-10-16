@@ -11,6 +11,7 @@ signal to fall back to the Datamart NetCDF path.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
@@ -133,7 +134,7 @@ class GDSPSWCSClient:
         response = self._get(params)
         return _coverage_bytes(response, coverage_id)
 
-    def _get(self, params: dict[str, object]) -> requests.Response:
+    def _get(self, params: Mapping[str, str | list[str]]) -> requests.Response:
         try:
             response = self.session.get(
                 self.endpoint,

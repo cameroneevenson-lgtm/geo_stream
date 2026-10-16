@@ -493,7 +493,7 @@ def build_gdsps_overlay_layer(
         opacity_value = float(opacity)
     except (TypeError, ValueError):
         opacity_value = 0.7
-    wms = folium.raster_layers.WmsTileLayer(
+    wms = folium.WmsTileLayer(
         url=url,
         layers=layers,
         styles=str(params.get("styles", "")),

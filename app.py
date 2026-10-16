@@ -94,6 +94,7 @@ from coastal_flood_explorer.gdsps_common import (
     MODEL_DEFINITIONS,
     RESPS_MODEL,
     GDSPSError,
+    GDSPSLayerInfo,
     GDSPSRun,
     gdsps_datamart_base_path,
 )
@@ -1128,6 +1129,62 @@ def _gdsps_fetch_numeric(
     )
 
 
+def _render_gdsps_unavailable(
+    all_models: tuple[str, ...],
+    bbox: tuple[float, float, float, float] | None,
+    discovery_errors: tuple[str | None, ...],
+) -> None:
+    """Explain why no storm-surge model is offered and clear the overlay."""
+
+    st.session_state["gdsps_overlay_params"] = None
+    if all_models and bbox is not None:
+        # Models exist but none cover the drawn ROI (e.g. regional RESPS
+        # with a Pacific ROI). This is expected, not an error.
+        hidden = ", ".join(all_models)
+        st.info(
+            f"No storm-surge model covers the drawn region. Available "
+            f"model(s) — {hidden} — do not include the ROI in their "
+            "forecast domain."
+        )
+        return
+    message = (
+        "Storm-surge content is not currently advertised by GeoMet and no "
+        "Datamart NetCDF files were discovered. This is not an error — the "
+        "product may be temporarily unavailable."
+    )
+    st.info(message)
+    for error in discovery_errors:
+        if error:
+            st.caption(error)
+
+
+def _sync_gdsps_overlay(
+    layer: GDSPSLayerInfo | None,
+    *,
+    enabled: bool,
+    model: str,
+    variable: str,
+    valid_time: datetime | None,
+    opacity: float,
+) -> None:
+    """Publish the WMS overlay parameters for the map, or clear them."""
+
+    if enabled and layer is not None:
+        st.session_state["gdsps_overlay_params"] = build_wms_tile_params(
+            layer,
+            time=valid_time,
+            opacity=float(opacity),
+        )
+    else:
+        st.session_state["gdsps_overlay_params"] = None
+        if enabled and layer is None:
+            st.warning(
+                f"GeoMet does not currently advertise a WMS overlay for "
+                f"{model} {variable}. The numerical subset may still be "
+                "available."
+            )
+
+
 def _render_gdsps_controls(
     bbox: tuple[float, float, float, float] | None,
     active_roi: Mapping[str, Any] | None,
@@ -1167,26 +1224,11 @@ def _render_gdsps_controls(
     all_models = gdsps_service.models_available(layers, files)
     models = gdsps_service.models_available(layers, files, roi_bbox=bbox)
     if not models:
-        st.session_state["gdsps_overlay_params"] = None
-        if all_models and bbox is not None:
-            # Models exist but none cover the drawn ROI (e.g. regional RESPS
-            # with a Pacific ROI). This is expected, not an error.
-            hidden = ", ".join(all_models)
-            st.info(
-                f"No storm-surge model covers the drawn region. Available "
-                f"model(s) — {hidden} — do not include the ROI in their "
-                "forecast domain."
-            )
-            return
-        message = (
-            "Storm-surge content is not currently advertised by GeoMet and no "
-            "Datamart NetCDF files were discovered. This is not an error — the "
-            "product may be temporarily unavailable."
+        _render_gdsps_unavailable(
+            all_models,
+            bbox,
+            (layers_error, files_error),
         )
-        st.info(message)
-        for error in (layers_error, files_error):
-            if error:
-                st.caption(error)
         return
 
     model = st.selectbox(
@@ -1276,20 +1318,14 @@ def _render_gdsps_controls(
         help="Adjusting opacity never triggers another download.",
     )
 
-    if enabled and layer is not None:
-        st.session_state["gdsps_overlay_params"] = build_wms_tile_params(
-            layer,
-            time=valid_time,
-            opacity=float(opacity),
-        )
-    else:
-        st.session_state["gdsps_overlay_params"] = None
-        if enabled and layer is None:
-            st.warning(
-                f"GeoMet does not currently advertise a WMS overlay for "
-                f"{model} {variable}. The numerical subset may still be "
-                "available."
-            )
+    _sync_gdsps_overlay(
+        layer,
+        enabled=enabled,
+        model=model,
+        variable=variable,
+        valid_time=valid_time,
+        opacity=opacity,
+    )
 
     # The numerical subset is retrieved via GeoMet WCS for both models (per
     # ensemble member for RESPS); the MSC Datamart NetCDF fallback applies to

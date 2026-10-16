@@ -747,17 +747,16 @@ def _render_chs_bundle(
         if column in frame and frame[column].notna().any()
     ]
     if chart_columns:
-        chart_colours = [
-            "#0284c7" if column == CHART_OBSERVED_COLUMN else "#f97316"
-            for column in chart_columns
-        ]
         st.line_chart(
             frame,
             x=CHART_TIME_COLUMN,
             y=chart_columns,
             x_label="Time (UTC)",
             y_label="Water level (m, local Chart Datum)",
-            color=chart_colours,
+            color=[
+                "#0284c7" if column == CHART_OBSERVED_COLUMN else "#f97316"
+                for column in chart_columns
+            ],
             height=330,
         )
     else:
@@ -1799,12 +1798,12 @@ def _collect_archive_dates(
 
 def _fetch_archive_range(
     bbox: tuple[float, float, float, float],
+    active_roi: Mapping[str, Any],
     requested_range: tuple[date, date],
 ) -> str | None:
     """Fetch, clip and store an archive range; return any error to show."""
 
     action_error: str | None = None
-    active_roi = st.session_state.get("active_roi")
     range_start, range_end = requested_range
     requested_dates = inclusive_archive_dates(
         range_start,
@@ -1930,11 +1929,11 @@ def _fetch_archive_range(
 
 def _generate_synthetic_dataset(
     bbox: tuple[float, float, float, float],
+    active_roi: Mapping[str, Any],
 ) -> str | None:
     """Generate and store synthetic test data; return any error to show."""
 
     action_error: str | None = None
-    active_roi = st.session_state.get("active_roi")
     try:
         generated = generate_synthetic_data(active_roi)
         clipped = clip_feature_collection(generated, active_roi)
@@ -2050,15 +2049,23 @@ def _render_sidebar() -> tuple[FilterCriteria, str | None]:
                 width="stretch",
             )
 
+        active_roi = st.session_state.get("active_roi")
         if (
             fetch_archive
             and bbox is not None
+            and active_roi is not None
             and requested_range is not None
         ):
-            action_error = _fetch_archive_range(bbox, requested_range)
+            action_error = _fetch_archive_range(
+                bbox,
+                active_roi,
+                requested_range,
+            )
 
-        if generate_synthetic and bbox is not None:
-            action_error = _generate_synthetic_dataset(bbox) or action_error
+        if generate_synthetic and bbox is not None and active_roi is not None:
+            action_error = (
+                _generate_synthetic_dataset(bbox, active_roi) or action_error
+            )
 
         _render_gdsps_controls(bbox, st.session_state.get("active_roi"))
 

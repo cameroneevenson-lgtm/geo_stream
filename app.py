@@ -9,7 +9,7 @@ import logging
 from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -793,6 +793,147 @@ def _render_chs_bundle(
     )
 
 
+class _CHSCatalogLoad(NamedTuple):
+    """One CHS catalogue lookup, possibly the last good copy after a failure."""
+
+    catalog: CHSStationCatalog | None
+    error: str | None
+    warnings: tuple[str, ...]
+    stale: bool
+
+
+class _CHSBundleLoad(NamedTuple):
+    """One station bundle lookup, possibly a labelled stale or fallback copy."""
+
+    bundle: CHSWaterLevelBundle | None
+    error: str | None
+    warnings: tuple[str, ...]
+    stale: bool
+    fallback_from: CHSStation | None
+
+
+def _load_chs_catalog() -> _CHSCatalogLoad:
+    """Fetch the CHS catalogue, reusing the last good copy after a failure."""
+
+    try:
+        catalog, catalog_error, catalog_warnings = _cached_chs_catalog(
+            CHS_API_ROOT
+        )
+    except Exception:
+        LOGGER.exception("Unexpected failure loading the CHS catalogue")
+        catalog = None
+        catalog_error = (
+            "An unexpected error occurred while loading CHS stations."
+        )
+        catalog_warnings = ()
+
+    previous_catalog = st.session_state.get("chs_catalog")
+    catalog_stale = False
+    if catalog is not None:
+        st.session_state["chs_catalog"] = catalog
+    elif isinstance(previous_catalog, CHSStationCatalog):
+        catalog = previous_catalog
+        catalog_stale = True
+    return _CHSCatalogLoad(
+        catalog, catalog_error, catalog_warnings, catalog_stale
+    )
+
+
+def _render_chs_roi_note(
+    current_roi: object,
+    match_error: str | None,
+    selected_station: CHSStation,
+    selected_match: CHSStationMatch | None,
+    *,
+    is_automatic_choice: bool,
+) -> None:
+    """Explain how the selected gauge relates to the drawn region."""
+
+    if current_roi is None:
+        pass  # No region: the station selector already says which gauge.
+    elif match_error is not None:
+        st.warning(
+            "The station-to-region distance could not be calculated. "
+            f"{selected_station.label} is shown as a fallback station; "
+            f"its distance from the drawing is unavailable. {match_error}"
+        )
+    elif selected_match is not None and selected_match.inside_roi:
+        st.success(
+            f"{selected_station.label} lies inside the exact drawn region."
+        )
+    elif selected_match is not None:
+        prefix = (
+            "No operating CHS observation station lies inside this "
+            "region. The nearest gauge is"
+            if is_automatic_choice
+            else "The manually selected gauge is"
+        )
+        st.info(
+            f"{prefix} {selected_station.label}, "
+            f"{selected_match.distance_to_roi_km:.1f} km outside the "
+            "exact boundary."
+        )
+
+
+def _load_chs_bundle(selected_station: CHSStation) -> _CHSBundleLoad:
+    """Fetch the selected station's bundle, labelling any stale fallback."""
+
+    anchor = floor_to_anchor(_utc_now())
+    try:
+        bundle, bundle_error, bundle_warnings = _cached_chs_bundle(
+            CHS_API_ROOT,
+            selected_station,
+            anchor,
+        )
+    except Exception:
+        LOGGER.exception(
+            "Unexpected CHS water-level failure for %s",
+            selected_station.id,
+        )
+        bundle = None
+        bundle_error = (
+            "An unexpected error occurred while loading CHS water levels."
+        )
+        bundle_warnings = ()
+
+    saved_bundles = st.session_state.get("chs_bundles")
+    if not isinstance(saved_bundles, dict):
+        saved_bundles = {}
+    bundle_stale = False
+    fallback_from: CHSStation | None = None
+    if bundle is not None:
+        saved_bundles = dict(saved_bundles)
+        saved_bundles[selected_station.id] = bundle
+        st.session_state["chs_bundles"] = saved_bundles
+    else:
+        previous_bundle = saved_bundles.get(selected_station.id)
+        if isinstance(previous_bundle, CHSWaterLevelBundle):
+            bundle = previous_bundle
+            bundle_stale = True
+        else:
+            fallback_candidates = [
+                candidate
+                for candidate in saved_bundles.values()
+                if (
+                    isinstance(candidate, CHSWaterLevelBundle)
+                    and candidate.station.id != selected_station.id
+                )
+            ]
+            if fallback_candidates:
+                bundle = max(
+                    fallback_candidates,
+                    key=lambda candidate: (
+                        candidate.fetched_at,
+                        candidate.station.id,
+                    ),
+                )
+                bundle_stale = True
+                fallback_from = selected_station
+    return _CHSBundleLoad(
+        bundle, bundle_error, bundle_warnings, bundle_stale, fallback_from
+    )
+
+
 def _render_chs_water_levels(
 ) -> tuple[tuple[CHSStation, ...], str | None, CHSWaterLevelBundle | None]:
     """Render the always-on ROI-driven CHS water-level experience."""
@@ -823,25 +964,9 @@ def _render_chs_water_levels(
             expanded=False,
             state="running",
         )
-        try:
-            catalog, catalog_error, catalog_warnings = _cached_chs_catalog(
-                CHS_API_ROOT
-            )
-        except Exception:
-            LOGGER.exception("Unexpected failure loading the CHS catalogue")
-            catalog = None
-            catalog_error = (
-                "An unexpected error occurred while loading CHS stations."
-            )
-            catalog_warnings = ()
-
-        previous_catalog = st.session_state.get("chs_catalog")
-        catalog_stale = False
-        if catalog is not None:
-            st.session_state["chs_catalog"] = catalog
-        elif isinstance(previous_catalog, CHSStationCatalog):
-            catalog = previous_catalog
-            catalog_stale = True
+        catalog, catalog_error, catalog_warnings, catalog_stale = (
+            _load_chs_catalog()
+        )
 
         if catalog is None or not catalog.stations:
             load_status.update(
@@ -905,83 +1030,17 @@ def _render_chs_water_levels(
         )
         selected_station = stations_by_id[selected_id]
 
-        selected_match = matches_by_id.get(selected_id)
-        if current_roi is None:
-            pass  # No region: the station selector already says which gauge.
-        elif match_error is not None:
-            st.warning(
-                "The station-to-region distance could not be calculated. "
-                f"{selected_station.label} is shown as a fallback station; "
-                f"its distance from the drawing is unavailable. {match_error}"
-            )
-        elif selected_match is not None and selected_match.inside_roi:
-            st.success(
-                f"{selected_station.label} lies inside the exact drawn region."
-            )
-        elif selected_match is not None:
-            prefix = (
-                "No operating CHS observation station lies inside this "
-                "region. The nearest gauge is"
-                if selected_id == auto_match.station.id
-                else "The manually selected gauge is"
-            )
-            st.info(
-                f"{prefix} {selected_station.label}, "
-                f"{selected_match.distance_to_roi_km:.1f} km outside the "
-                "exact boundary."
-            )
+        _render_chs_roi_note(
+            current_roi,
+            match_error,
+            selected_station,
+            matches_by_id.get(selected_id),
+            is_automatic_choice=selected_id == auto_match.station.id,
+        )
 
-        anchor = floor_to_anchor(_utc_now())
-        try:
-            bundle, bundle_error, bundle_warnings = _cached_chs_bundle(
-                CHS_API_ROOT,
-                selected_station,
-                anchor,
-            )
-        except Exception:
-            LOGGER.exception(
-                "Unexpected CHS water-level failure for %s",
-                selected_station.id,
-            )
-            bundle = None
-            bundle_error = (
-                "An unexpected error occurred while loading CHS water levels."
-            )
-            bundle_warnings = ()
-
-        saved_bundles = st.session_state.get("chs_bundles")
-        if not isinstance(saved_bundles, dict):
-            saved_bundles = {}
-        bundle_stale = False
-        fallback_from: CHSStation | None = None
-        if bundle is not None:
-            saved_bundles = dict(saved_bundles)
-            saved_bundles[selected_station.id] = bundle
-            st.session_state["chs_bundles"] = saved_bundles
-        else:
-            previous_bundle = saved_bundles.get(selected_station.id)
-            if isinstance(previous_bundle, CHSWaterLevelBundle):
-                bundle = previous_bundle
-                bundle_stale = True
-            else:
-                fallback_candidates = [
-                    candidate
-                    for candidate in saved_bundles.values()
-                    if (
-                        isinstance(candidate, CHSWaterLevelBundle)
-                        and candidate.station.id != selected_station.id
-                    )
-                ]
-                if fallback_candidates:
-                    bundle = max(
-                        fallback_candidates,
-                        key=lambda candidate: (
-                            candidate.fetched_at,
-                            candidate.station.id,
-                        ),
-                    )
-                    bundle_stale = True
-                    fallback_from = selected_station
+        bundle, bundle_error, bundle_warnings, bundle_stale, fallback_from = (
+            _load_chs_bundle(selected_station)
+        )
 
         if bundle is None:
             load_status.update(

@@ -9,7 +9,7 @@ import math
 import os
 import re
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -164,6 +164,78 @@ def _json_size(value: object) -> int:
     )
 
 
+def _snapshot_mapping(
+    value: Mapping[object, object],
+    *,
+    depth: int,
+    seen: set[int],
+    stats: dict[str, int],
+) -> object:
+    """Convert a mapping to bounded JSON-safe data without sensitive keys."""
+
+    value_id = id(value)
+    if value_id in seen:
+        stats["values_omitted"] += 1
+        return "<omitted cyclic reference>"
+    seen.add(value_id)
+    result: dict[str, object] = {}
+    try:
+        items = list(
+            itertools.islice(value.items(), MAX_COLLECTION_ITEMS + 1)
+        )
+        for index, (raw_key, item) in enumerate(items):
+            if index >= MAX_COLLECTION_ITEMS:
+                stats["values_omitted"] += 1
+                break
+            if not isinstance(raw_key, str):
+                stats["values_omitted"] += 1
+                continue
+            if _is_sensitive_key(raw_key):
+                stats["sensitive_values_omitted"] += 1
+                continue
+            result[raw_key] = _safe_snapshot_value(
+                item,
+                depth=depth + 1,
+                seen=seen,
+                stats=stats,
+            )
+    finally:
+        seen.remove(value_id)
+    return result
+
+
+def _snapshot_sequence(
+    value: Iterable[object],
+    *,
+    depth: int,
+    seen: set[int],
+    stats: dict[str, int],
+) -> object:
+    """Convert a list, tuple or set to a bounded JSON-safe list."""
+
+    value_id = id(value)
+    if value_id in seen:
+        stats["values_omitted"] += 1
+        return "<omitted cyclic reference>"
+    seen.add(value_id)
+    try:
+        values = list(itertools.islice(value, MAX_COLLECTION_ITEMS + 1))
+        result_list = [
+            _safe_snapshot_value(
+                item,
+                depth=depth + 1,
+                seen=seen,
+                stats=stats,
+            )
+            for item in values[:MAX_COLLECTION_ITEMS]
+        ]
+        if len(values) > MAX_COLLECTION_ITEMS:
+            stats["values_omitted"] += 1
+    finally:
+        seen.remove(value_id)
+    return result_list
+
+
 def _safe_snapshot_value(
     value: object,
     *,
@@ -198,58 +270,10 @@ def _safe_snapshot_value(
         stats["values_omitted"] += 1
         return f"<omitted beyond depth limit: {_safe_type_name(value)}>"
 
-    value_id = id(value)
     if isinstance(value, Mapping):
-        if value_id in seen:
-            stats["values_omitted"] += 1
-            return "<omitted cyclic reference>"
-        seen.add(value_id)
-        result: dict[str, object] = {}
-        try:
-            items = list(
-                itertools.islice(value.items(), MAX_COLLECTION_ITEMS + 1)
-            )
-            for index, (raw_key, item) in enumerate(items):
-                if index >= MAX_COLLECTION_ITEMS:
-                    stats["values_omitted"] += 1
-                    break
-                if not isinstance(raw_key, str):
-                    stats["values_omitted"] += 1
-                    continue
-                if _is_sensitive_key(raw_key):
-                    stats["sensitive_values_omitted"] += 1
-                    continue
-                result[raw_key] = _safe_snapshot_value(
-                    item,
-                    depth=depth + 1,
-                    seen=seen,
-                    stats=stats,
-                )
-        finally:
-            seen.remove(value_id)
-        return result
-
+        return _snapshot_mapping(value, depth=depth, seen=seen, stats=stats)
     if isinstance(value, (list, tuple, set, frozenset)):
-        if value_id in seen:
-            stats["values_omitted"] += 1
-            return "<omitted cyclic reference>"
-        seen.add(value_id)
-        try:
-            values = list(itertools.islice(value, MAX_COLLECTION_ITEMS + 1))
-            result_list = [
-                _safe_snapshot_value(
-                    item,
-                    depth=depth + 1,
-                    seen=seen,
-                    stats=stats,
-                )
-                for item in values[:MAX_COLLECTION_ITEMS]
-            ]
-            if len(values) > MAX_COLLECTION_ITEMS:
-                stats["values_omitted"] += 1
-        finally:
-            seen.remove(value_id)
-        return result_list
+        return _snapshot_sequence(value, depth=depth, seen=seen, stats=stats)
 
     stats["values_omitted"] += 1
     return f"<unsupported value: {_safe_type_name(value)}>"

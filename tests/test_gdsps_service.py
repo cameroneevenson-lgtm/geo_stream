@@ -26,6 +26,11 @@ RUN_00 = GDSPSRun(datetime(2026, 7, 22, 0, tzinfo=timezone.utc), "00")
 RUN_12 = GDSPSRun(datetime(2026, 7, 22, 12, tzinfo=timezone.utc), "12")
 
 
+def _must(layer: GDSPSLayerInfo | None) -> GDSPSLayerInfo:
+    assert layer is not None
+    return layer
+
+
 def _file(variable: str, run: GDSPSRun, lead: int) -> GDSPSDatamartFile:
     valid = run.issue_time.replace() + pd.Timedelta(hours=lead).to_pytimedelta()
     return GDSPSDatamartFile(
@@ -50,7 +55,7 @@ def test_layer_for_variable() -> None:
         GDSPSLayerInfo("GDSPS.ETAS", "t", ETAS),
         GDSPSLayerInfo("GDSPS.SSH", "t", SSH),
     )
-    assert gdsps_service.layer_for_variable(layers, SSH).name == "GDSPS.SSH"
+    assert _must(gdsps_service.layer_for_variable(layers, SSH)).name == "GDSPS.SSH"
     assert gdsps_service.layer_for_variable(layers, "ZZZ") is None
 
 
@@ -77,9 +82,9 @@ def test_model_scoped_selection_keeps_gdsps_and_resps_separate() -> None:
     assert gdsps_service.members_for_model(layers, GDSPS_MODEL, ETAS) == ()
 
     # layer_for keeps model and ensemble member distinct.
-    assert gdsps_service.layer_for(layers, GDSPS_MODEL, ETAS).member is None
+    assert _must(gdsps_service.layer_for(layers, GDSPS_MODEL, ETAS)).member is None
     assert (
-        gdsps_service.layer_for(layers, RESPS_MODEL, ETAS, 2).name
+        _must(gdsps_service.layer_for(layers, RESPS_MODEL, ETAS, 2)).name
         == "RESPS_9km_StormSurge_02"
     )
     assert gdsps_service.layer_for(layers, RESPS_MODEL, SSH, 1) is None

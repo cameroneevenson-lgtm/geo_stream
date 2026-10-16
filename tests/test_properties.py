@@ -217,7 +217,9 @@ def test_feature_record_derives_explicit_synthetic_and_eccc_source_labels() -> N
 
 def test_feature_record_falls_back_to_property_id() -> None:
     feature = _feature(feature_id=None)
-    feature["properties"]["id"] = "property-id"
+    properties = feature["properties"]
+    assert isinstance(properties, dict)
+    properties["id"] = "property-id"
     assert feature_record(feature)["feature_id"] == "property-id"
 
 

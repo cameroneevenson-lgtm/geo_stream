@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 import requests
+from requests.adapters import HTTPAdapter
 
 from coastal_flood_explorer.api import (
     ECCC_API_URL,
@@ -119,7 +120,9 @@ def test_validate_bbox_returns_floats_in_crs84_order() -> None:
 
 def test_default_session_has_user_agent_and_bounded_get_retries() -> None:
     session = build_retry_session()
-    retry = session.get_adapter("https://").max_retries
+    adapter = session.get_adapter("https://")
+    assert isinstance(adapter, HTTPAdapter)
+    retry = adapter.max_retries
 
     assert session.headers["User-Agent"] == USER_AGENT
     assert retry.total == RETRY_COUNT

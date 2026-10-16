@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 
@@ -89,7 +90,7 @@ def test_classify_variable(candidates: tuple[str, ...], expected: str | None) ->
     ],
 )
 def test_classify_model_separates_models_and_rejects_non_model(
-    candidates: tuple[object, ...],
+    candidates: tuple[Any, ...],
     expected: str | None,
 ) -> None:
     assert classify_model(*candidates) == expected

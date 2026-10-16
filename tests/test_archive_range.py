@@ -26,6 +26,13 @@ from coastal_flood_explorer.archive_range import (
 )
 
 
+def _features(collection: dict[str, object]) -> list[dict[str, Any]]:
+    """Return a collection's feature list, which these tests expect to exist."""
+    features = collection["features"]
+    assert isinstance(features, list)
+    return features
+
+
 def _product(issue_date: str, *, suffix: str = "a") -> ArchiveProduct:
     issue_time = datetime.strptime(
         f"{issue_date}T1200Z",
@@ -181,13 +188,15 @@ def test_combiner_does_not_mutate_or_share_input_payloads() -> None:
         successes=[("20260701", first), ("20260702", second)],
     )
 
-    assert [item["id"] for item in combined.collection["features"]] == [
+    assert [item["id"] for item in _features(combined.collection)] == [
         "same",
         "same",
     ]
-    combined.collection["features"][0]["properties"]["score"] = 99
-    combined.outcomes[0].result.collection["features"][0]["id"] = "changed"
-    combined.outcomes[0].result.documents[0].payload["vendor"] = {}
+    _features(combined.collection)[0]["properties"]["score"] = 99
+    first_result = combined.outcomes[0].result
+    assert first_result is not None
+    _features(first_result.collection)[0]["id"] = "changed"
+    first_result.documents[0].payload["vendor"] = {}
     assert first == first_before
     assert second == second_before
 
@@ -297,7 +306,7 @@ def test_fetch_archive_range_retains_partial_errors_and_attempts_all_days() -> N
     assert client.calls == ["20260701", "20260702", "20260703"]
     assert result.successful_date_count == 2
     assert result.failed_date_count == 1
-    assert [feature["id"] for feature in result.collection["features"]] == [
+    assert [feature["id"] for feature in _features(result.collection)] == [
         "one",
         "three",
     ]
@@ -345,7 +354,7 @@ def test_fetch_archive_range_stops_at_cumulative_feature_limit(
     assert client.calls == ["20260701"]
     assert result.successful_date_count == 1
     assert result.failed_date_count == 2
-    assert [feature["id"] for feature in result.collection["features"]] == [
+    assert [feature["id"] for feature in _features(result.collection)] == [
         "one"
     ]
     assert all(

@@ -230,7 +230,9 @@ def test_fetch_catalog_uses_official_filter_and_keeps_only_operating_wlo() -> No
     assert result.fetched_at == ANCHOR
     assert result.skipped_count == 3
     assert len(result.warnings) == 3
-    assert result.raw_payload()[0]["officialName"] == "Bedford Institute"
+    raw_first = result.raw_payload()[0]
+    assert isinstance(raw_first, dict)
+    assert raw_first["officialName"] == "Bedford Institute"
     assert session.headers["User-Agent"] == USER_AGENT
     assert session.calls == [
         (

@@ -12,6 +12,7 @@ import importlib
 import sys
 from collections.abc import Iterator
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -58,11 +59,17 @@ def tools_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
         _purge_geo_stream_modules()
 
 
+def _module_path(module: ModuleType) -> Path:
+    """Return the resolved file of an imported module, which must have one."""
+    assert module.__file__ is not None
+    return Path(module.__file__).resolve()
+
+
 def test_geo_stream_package_importable_from_tools_parent(
     tools_layout: Path,
 ) -> None:
     geo_stream = importlib.import_module("geo_stream")
-    assert Path(geo_stream.__file__).resolve().parent == REPO_ROOT
+    assert _module_path(geo_stream).parent == REPO_ROOT
 
 
 def test_nested_library_importable_from_tools_parent(
@@ -83,7 +90,7 @@ def test_flat_library_resolves_after_geo_stream_bootstrap(
     importlib.import_module("geo_stream")
     flat = importlib.import_module("coastal_flood_explorer")
     nested = importlib.import_module("geo_stream.coastal_flood_explorer")
-    assert Path(flat.__file__).resolve() == Path(nested.__file__).resolve()
+    assert _module_path(flat) == _module_path(nested)
 
 
 def test_geo_stream_app_importable_from_tools_parent(
@@ -91,7 +98,7 @@ def test_geo_stream_app_importable_from_tools_parent(
 ) -> None:
     """geo_stream.app loads under Tools-only path (flat imports via bootstrap)."""
     app = importlib.import_module("geo_stream.app")
-    assert Path(app.__file__).resolve() == REPO_ROOT / "app.py"
+    assert _module_path(app) == REPO_ROOT / "app.py"
     assert hasattr(app, "main") or hasattr(app, "LOGGER")
 
 
@@ -106,7 +113,7 @@ def test_short_geo_stream_x_import_aliases_library(
         f"geo_stream.coastal_flood_explorer.{short_name}"
     )
     assert aliased is nested
-    assert Path(aliased.__file__).resolve().parent == (
+    assert _module_path(aliased).parent == (
         REPO_ROOT / "coastal_flood_explorer"
     )
 
@@ -122,4 +129,4 @@ def test_short_alias_does_not_shadow_real_app_module(
     tools_layout: Path,
 ) -> None:
     app = importlib.import_module("geo_stream.app")
-    assert Path(app.__file__).resolve() == REPO_ROOT / "app.py"
+    assert _module_path(app) == REPO_ROOT / "app.py"
